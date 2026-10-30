@@ -1,0 +1,34 @@
+{
+	"$schema": "https://playground.wordpress.net/blueprint-schema.json",
+	"meta": {
+		"title": "Axle AI Guard demo",
+		"author": "aryanjasala"
+	},
+	"landingPage": "/wp-admin/tools.php?page=axle-ai-guard",
+	"preferredVersions": {
+		"php": "8.3",
+		"wp": "latest"
+	},
+	"features": {
+		"networking": true
+	},
+	"login": true,
+	"steps": [
+		{
+			"step": "installPlugin",
+			"pluginData": {
+				"resource": "git:directory",
+				"url": "https://github.com/aryanjasala/axle-ai-guard",
+				"ref": "main"
+			},
+			"options": {
+				"activate": true,
+				"targetFolderName": "axle-ai-guard"
+			}
+		},
+		{
+			"step": "runPHP",
+			"code": "<?php require_once '/wordpress/wp-load.php'; global $wpdb; update_option( 'blogname', 'Bean There Coffee' ); $rows = array( array( 'chat-assistant', 'ok', '', 1450, 320 ), array( 'chat-assistant', 'ok', '', 1210, 280 ), array( 'chat-assistant', 'blocked', 'rate', 0, 0 ), array( 'seo-writer', 'ok', '', 2400, 160 ), array( 'seo-writer', 'blocked', 'data:password_hash', 0, 0 ), array( 'image-alt-text', 'ok', '', 900, 60 ), array( 'image-alt-text', 'error', '', 0, 0 ) ); foreach ( $rows as $i => $r ) { $cost = 'ok' === $r[1] ? (int) round( $r[3] * 0.25 + $r[4] * 2 ) : 0; $wpdb->insert( $wpdb->prefix . 'axle_ai_guard_calls', array( 'started_at' => gmdate( 'Y-m-d H:i:s', time() - ( 7 - $i ) * 600 ), 'duration_ms' => 'ok' === $r[1] ? 900 + 100 * $i : 0, 'status' => $r[1], 'block_rule' => $r[2], 'path' => 'client', 'caller_type' => 'plugin', 'caller_slug' => $r[0], 'caller_file' => 'plugins/' . $r[0] . '/' . $r[0] . '.php:42', 'context' => 'chat-assistant' === $r[0] ? 'front' : 'admin', 'provider' => 'openai', 'model' => 'gpt-5-mini', 'capability' => 'text_generation', 'prompt_tokens' => $r[3], 'completion_tokens' => $r[4], 'total_tokens' => $r[3] + $r[4], 'cost_micros' => $cost, 'currency' => 'USD', 'http_status' => 'error' === $r[1] ? 500 : ( 'ok' === $r[1] ? 200 : 0 ), 'profile' => wp_json_encode( array( 'messages' => 1, 'chars' => array( 'user' => 4 * $r[3] ), 'findings' => array() ) ) ) ); foreach ( array( 'global', 'plugin:' . $r[0], 'provider:openai' ) as $s ) { foreach ( array( 'd:' . gmdate( 'Y-m-d' ), 'm:' . gmdate( 'Y-m' ) ) as $p ) { $wpdb->query( $wpdb->prepare( 'INSERT INTO %i (period, subject, calls, tokens, cost_micros, blocked) VALUES (%s, %s, %d, %d, %d, %d) ON DUPLICATE KEY UPDATE calls = calls + VALUES(calls), tokens = tokens + VALUES(tokens), cost_micros = cost_micros + VALUES(cost_micros), blocked = blocked + VALUES(blocked)', $wpdb->prefix . 'axle_ai_guard_usage', $p, $s, 'blocked' === $r[1] ? 0 : 1, $r[3] + $r[4], $cost, 'blocked' === $r[1] ? 1 : 0 ) ); } } } $callers = array(); foreach ( array( 'chat-assistant', 'seo-writer', 'image-alt-text' ) as $c ) { $callers[ $c ] = array( 'type' => 'plugin', 'file' => 'plugins/' . $c . '/' . $c . '.php', 'first_seen' => time(), 'status' => 'approved' ); } update_option( 'axle_ai_guard_seen_callers', $callers ); update_option( 'axle_ai_guard_policies', array( 'global' => array( 'monthly_cost' => 25000000 ), 'plugin:chat-assistant' => array( 'monthly_cost' => 2000 ) ) );"
+		}
+	]
+}
