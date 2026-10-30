@@ -1,0 +1,83 @@
+{
+  "$comment": "Screens tests/e2e/a11y.spec.js checks with axe-core. This file belongs to the plugin: apply-template.py only writes it when it is missing. The fields are described in docs/DEVELOPMENT.md.",
+  "include": ["#wpbody-content"],
+  "exclude": [],
+  "screens": [
+    {
+      "name": "Overview, no calls yet",
+      "setup": [{ "js": "seed.js", "call": "installFixtures" }, { "js": "seed.js", "call": "reset" }],
+      "url": "/wp-admin/tools.php?page=axle-ai-guard",
+      "steps": [{ "waitFor": ".aag-card" }]
+    },
+    {
+      "name": "Overview with calls, budgets and blocks",
+      "setup": [{ "js": "seed.js", "call": "seedActivity" }],
+      "url": "/wp-admin/tools.php?page=axle-ai-guard",
+      "steps": [{ "waitFor": ".aag-callers tbody tr" }],
+      "cleanup": [{ "js": "seed.js", "call": "unseed" }]
+    },
+    {
+      "name": "Overview with kill switches on",
+      "setup": [{ "js": "seed.js", "call": "seedActivity" }, { "js": "seed.js", "call": "killChat" }, ["axle-ai-guard", "kill", "--reason=Provider outage"]],
+      "url": "/wp-admin/tools.php?page=axle-ai-guard",
+      "steps": [{ "waitFor": ".aag-switches" }],
+      "cleanup": [{ "js": "seed.js", "call": "unseed" }]
+    },
+    {
+      "name": "Admin bar node and notice while AI is off",
+      "setup": [{ "js": "seed.js", "call": "reset" }, ["axle-ai-guard", "kill"]],
+      "url": "/wp-admin/index.php",
+      "include": [".aag-kill-notice", "#wp-admin-bar-axle-ai-guard"],
+      "cleanup": [{ "js": "seed.js", "call": "unseed" }]
+    },
+    {
+      "name": "Calls",
+      "setup": [{ "js": "seed.js", "call": "seedActivity" }],
+      "url": "/wp-admin/tools.php?page=axle-ai-guard&tab=calls",
+      "steps": [{ "waitFor": ".aag-calls-table" }],
+      "cleanup": [{ "js": "seed.js", "call": "unseed" }]
+    },
+    {
+      "name": "Calls, detail dialog open",
+      "setup": [{ "js": "seed.js", "call": "seedActivity" }],
+      "url": "/wp-admin/tools.php?page=axle-ai-guard&tab=calls",
+      "steps": [{ "click": ".aag-detail-button" }, { "waitFor": ".aag-detail" }],
+      "include": [".aag-modal"],
+      "cleanup": [{ "js": "seed.js", "call": "unseed" }]
+    },
+    {
+      "name": "Calls, no match",
+      "setup": [{ "js": "seed.js", "call": "reset" }],
+      "url": "/wp-admin/tools.php?page=axle-ai-guard&tab=calls",
+      "steps": [{ "waitFor": ".aag-calls-table" }]
+    },
+    {
+      "name": "Budgets and limits",
+      "setup": [{ "js": "seed.js", "call": "seedActivity" }],
+      "url": "/wp-admin/tools.php?page=axle-ai-guard&tab=budgets",
+      "steps": [{ "waitFor": ".aag-policy" }],
+      "cleanup": [{ "js": "seed.js", "call": "unseed" }]
+    },
+    {
+      "name": "Data rules",
+      "url": "/wp-admin/tools.php?page=axle-ai-guard&tab=rules",
+      "steps": [{ "waitFor": ".aag-rules" }]
+    },
+    {
+      "name": "Data rules, test box with a result",
+      "url": "/wp-admin/tools.php?page=axle-ai-guard&tab=rules",
+      "steps": [{ "fill": "#aag-test-text", "value": "Mail admin@example.com or call +91 98765 43210" }, { "click": ".aag-test input[type=submit]" }, { "waitFor": ".aag-test-result" }]
+    },
+    {
+      "name": "Prices",
+      "url": "/wp-admin/tools.php?page=axle-ai-guard&tab=prices",
+      "steps": [{ "waitFor": ".aag-prices" }]
+    },
+    {
+      "name": "Settings",
+      "url": "/wp-admin/tools.php?page=axle-ai-guard&tab=settings",
+      "steps": [{ "waitFor": "#aag-new_caller" }]
+    }
+  ],
+  "skip": {}
+}

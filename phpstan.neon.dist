@@ -1,0 +1,16 @@
+# The WordPress extension (szepeviktor/phpstan-wordpress) is loaded by phpstan/extension-installer.
+parameters:
+	level: 6
+	paths:
+		- axle-ai-guard.php
+		- uninstall.php
+		- src
+	dynamicConstantNames:
+		- AXLE_AI_GUARD_KILL
+	scanFiles:
+		- vendor/php-stubs/wp-cli-stubs/wp-cli-stubs.php
+	bootstrapFiles:
+		- tests/phpstan-bootstrap.php
+	ignoreErrors:
+		# WordPress passes untyped arrays everywhere (hook arguments, options, REST data).
+		- identifier: missingType.iterableValue
