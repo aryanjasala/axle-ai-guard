@@ -54,7 +54,10 @@ final class Network implements Service {
 	 * Adds Settings > AI Guard in Network Admin.
 	 */
 	public function add_page(): void {
-		add_submenu_page( 'settings.php', __( 'Axle AI Guard', 'axle-ai-guard' ), __( 'AI Guard', 'axle-ai-guard' ), 'manage_network_options', self::SLUG, array( $this, 'render' ) );
+		$hook = add_submenu_page( 'settings.php', __( 'Axle AI Guard', 'axle-ai-guard' ), __( 'AI Guard', 'axle-ai-guard' ), 'manage_network_options', self::SLUG, array( $this, 'render' ) );
+		if ( $hook ) {
+			add_action( "admin_print_styles-{$hook}", array( AxleUi::class, 'enqueue' ) );
+		}
 	}
 
 	/**
@@ -66,20 +69,25 @@ final class Network implements Service {
 		}
 
 		$on = KillSwitch::network();
-		echo '<div class="wrap aag-wrap"><h1>' . esc_html__( 'Axle AI Guard', 'axle-ai-guard' ) . '</h1>';
+		echo '<div class="wrap axle-ui aag-wrap"><h1 class="wp-heading-inline">' . esc_html__( 'AI Guard', 'axle-ai-guard' ) . '</h1>';
+		echo ' <span class="axle-status axle-badge axle-badge--' . ( $on ? 'error' : 'good' ) . '">' . esc_html( $on ? __( 'AI is off', 'axle-ai-guard' ) : __( 'Guarding', 'axle-ai-guard' ) ) . '</span>';
+		echo '<hr class="wp-header-end">';
+		echo '<p class="axle-intro">' . esc_html__( 'Switch AI calls off on every site of the network at once, and see what each site used this month.', 'axle-ai-guard' ) . '</p>';
+		echo '<section class="axle-card' . ( $on ? '' : ' axle-card--danger' ) . '"><h2 class="axle-card__title">' . esc_html__( 'Network kill switch', 'axle-ai-guard' ) . '</h2>';
 		echo '<form method="post" action="' . esc_url( network_admin_url( 'admin-post.php' ) ) . '">';
 		echo '<input type="hidden" name="action" value="axle_ai_guard_network_kill">';
 		wp_nonce_field( 'axle_ai_guard_network_kill' );
 		if ( $on ) {
-			echo '<p>' . esc_html__( 'AI calls are switched off on every site of the network.', 'axle-ai-guard' ) . '</p>';
+			echo '<p><span class="axle-badge axle-badge--error">' . esc_html__( 'Switched off', 'axle-ai-guard' ) . '</span> ' . esc_html__( 'AI calls are switched off on every site of the network.', 'axle-ai-guard' ) . '</p>';
 			echo '<input type="hidden" name="on" value="0"><button type="submit" class="button button-primary">' . esc_html__( 'Turn AI back on for the network', 'axle-ai-guard' ) . '</button>';
 		} else {
+			echo '<p>' . esc_html__( 'This blocks every AI call on every site until you turn it back on. Nothing is deleted, and you can undo it here at any time.', 'axle-ai-guard' ) . '</p>';
 			echo '<p><label for="aag-network-reason">' . esc_html__( 'Reason', 'axle-ai-guard' ) . '</label> <input type="text" id="aag-network-reason" name="reason" class="regular-text"></p>';
-			echo '<input type="hidden" name="on" value="1"><button type="submit" class="button">' . esc_html__( 'Switch AI off on every site', 'axle-ai-guard' ) . '</button>';
+			echo '<input type="hidden" name="on" value="1"><button type="submit" class="button axle-button--danger">' . esc_html__( 'Switch AI off on every site', 'axle-ai-guard' ) . '</button>';
 		}
-		echo '</form>';
+		echo '</form></section>';
 
-		echo '<h2>' . esc_html__( 'Usage this month per site', 'axle-ai-guard' ) . '</h2>';
+		echo '<section class="axle-card"><h2 class="axle-card__title">' . esc_html__( 'Usage this month per site', 'axle-ai-guard' ) . '</h2>';
 		echo '<table class="widefat striped"><thead><tr><th scope="col">' . esc_html__( 'Site', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Calls', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Tokens', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Cost', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Blocked', 'axle-ai-guard' ) . '</th></tr></thead><tbody>';
 		foreach ( get_sites(
 			array(
@@ -102,7 +110,9 @@ final class Network implements Service {
 			}
 			echo '</tr>';
 		}
-		echo '</tbody></table></div>';
+		echo '</tbody></table></section>';
+		AxleUi::footer();
+		echo '</div>';
 	}
 
 	/**

@@ -49,7 +49,7 @@
       "name": "Calls, no match",
       "setup": [{ "js": "seed.js", "call": "reset" }],
       "url": "/wp-admin/tools.php?page=axle-ai-guard&tab=calls",
-      "steps": [{ "waitFor": ".aag-calls-table" }]
+      "steps": [{ "waitFor": ".aag-empty" }]
     },
     {
       "name": "Budgets and limits",

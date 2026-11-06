@@ -156,7 +156,8 @@ final class Page implements Service {
 	 * Styles, script and the data the script renders.
 	 */
 	public function enqueue(): void {
-		wp_enqueue_style( 'axle-ai-guard-admin', plugins_url( 'assets/admin.css', PLUGIN_FILE ), array(), VERSION );
+		AxleUi::enqueue();
+		wp_enqueue_style( 'axle-ai-guard-admin', plugins_url( 'assets/admin.css', PLUGIN_FILE ), array( AxleUi::HANDLE ), VERSION );
 		wp_enqueue_script( 'axle-ai-guard-admin', plugins_url( 'assets/admin.js', PLUGIN_FILE ), array( 'wp-hooks', 'wp-api-fetch', 'wp-i18n' ), VERSION, true );
 		wp_set_script_translations( 'axle-ai-guard-admin', 'axle-ai-guard' );
 
@@ -234,8 +235,25 @@ final class Page implements Service {
 			'settings' => __( 'Settings', 'axle-ai-guard' ),
 		);
 
-		echo '<div class="wrap aag-wrap">';
-		echo '<h1>' . esc_html__( 'Axle AI Guard', 'axle-ai-guard' ) . '</h1>';
+		$intros = array(
+			'overview' => __( 'See which plugins make AI calls on this site, what they cost and what was blocked. The kill switch stops every call at once.', 'axle-ai-guard' ),
+			'calls'    => __( 'Every AI call the guard saw, newest first. Open a call to see its tokens, cost and what the data rules found.', 'axle-ai-guard' ),
+			'budgets'  => __( 'Set how many calls, tokens and how much money each plugin may use, and decide which plugins may call AI at all.', 'axle-ai-guard' ),
+			'rules'    => __( 'Choose what happens when a call is about to send personal data or text that matches your own rules.', 'axle-ai-guard' ),
+			'prices'   => __( 'The price table turns tokens into estimated costs. Edit it when your provider changes its prices.', 'axle-ai-guard' ),
+			'settings' => __( 'How new plugins are handled, how long data is kept, and where alerts go.', 'axle-ai-guard' ),
+		);
+
+		echo '<div class="wrap axle-ui aag-wrap">';
+		echo '<h1 class="wp-heading-inline">' . esc_html__( 'AI Guard', 'axle-ai-guard' ) . '</h1>';
+		if ( $this->kill->global_on() ) {
+			echo ' <span class="axle-status axle-badge axle-badge--error">' . esc_html__( 'AI is off', 'axle-ai-guard' ) . '</span>';
+		} elseif ( $this->kill->any_on() ) {
+			echo ' <span class="axle-status axle-badge axle-badge--warning">' . esc_html__( 'AI partly off', 'axle-ai-guard' ) . '</span>';
+		} else {
+			echo ' <span class="axle-status axle-badge axle-badge--good">' . esc_html__( 'Guarding', 'axle-ai-guard' ) . '</span>';
+		}
+		echo '<hr class="wp-header-end">';
 		$this->done_notice();
 
 		echo '<nav class="nav-tab-wrapper aag-tabs" aria-label="' . esc_attr__( 'AI Guard sections', 'axle-ai-guard' ) . '">';
@@ -250,8 +268,11 @@ final class Page implements Service {
 		}
 		echo '</nav>';
 
+		echo '<p class="axle-intro">' . esc_html( $intros[ $tab ] ) . '</p>';
+
 		$method = 'render_' . $tab;
 		$this->$method();
+		AxleUi::footer();
 		echo '</div>';
 	}
 
@@ -353,10 +374,10 @@ final class Page implements Service {
 	 */
 	private function render_overview(): void {
 		// The global switch.
-		echo '<section class="aag-section aag-global" aria-labelledby="aag-global-title">';
-		echo '<h2 id="aag-global-title">' . esc_html__( 'Kill switch', 'axle-ai-guard' ) . '</h2>';
+		echo '<section class="axle-card' . ( $this->kill->global_on() ? '' : ' axle-card--danger' ) . ' aag-global" aria-labelledby="aag-global-title">';
+		echo '<h2 class="axle-card__title" id="aag-global-title">' . esc_html__( 'Kill switch', 'axle-ai-guard' ) . '</h2>';
 		if ( $this->kill->global_on() ) {
-			echo '<p class="aag-status aag-status-off">' . esc_html__( 'All AI calls on this site are switched off.', 'axle-ai-guard' ) . '</p>';
+			echo '<p class="aag-status aag-status-off"><span class="axle-badge axle-badge--error">' . esc_html__( 'Switched off', 'axle-ai-guard' ) . '</span> ' . esc_html__( 'All AI calls on this site are switched off.', 'axle-ai-guard' ) . '</p>';
 			if ( KillSwitch::constant_on() || KillSwitch::network() ) {
 				echo '<p>' . esc_html__( 'The AXLE_AI_GUARD_KILL constant or the network switch keeps it off. Change it there.', 'axle-ai-guard' ) . '</p>';
 			}
@@ -364,20 +385,21 @@ final class Page implements Service {
 				$this->kill_button( 'global', '', false, __( 'Turn AI back on', 'axle-ai-guard' ), 'button button-primary' );
 			}
 		} else {
-			echo '<p class="aag-status">' . esc_html__( 'AI calls are allowed, within the budgets and rules below.', 'axle-ai-guard' ) . '</p>';
+			echo '<p class="aag-status"><span class="axle-badge axle-badge--good">' . esc_html__( 'Allowed', 'axle-ai-guard' ) . '</span> ' . esc_html__( 'AI calls are allowed, within your budgets and data rules.', 'axle-ai-guard' ) . '</p>';
+			echo '<p>' . esc_html__( 'Switching AI off blocks every AI call on this site until you turn it back on. Nothing is deleted, and you can undo it here at any time.', 'axle-ai-guard' ) . '</p>';
 			echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="aag-inline-form">';
 			self::form_fields( 'kill' );
 			echo '<input type="hidden" name="scope" value="global"><input type="hidden" name="on" value="1">';
 			echo '<label for="aag-kill-reason">' . esc_html__( 'Reason', 'axle-ai-guard' ) . '</label> ';
 			echo '<input type="text" id="aag-kill-reason" name="reason" class="regular-text"> ';
-			echo '<button type="submit" class="button aag-danger">' . esc_html__( 'Switch all AI off', 'axle-ai-guard' ) . '</button>';
+			echo '<button type="submit" class="button axle-button--danger aag-danger">' . esc_html__( 'Switch all AI off', 'axle-ai-guard' ) . '</button>';
 			echo '</form>';
 		}
 		echo '</section>';
 
 		echo '<section class="aag-section" aria-labelledby="aag-cards-title"><h2 id="aag-cards-title">' . esc_html__( 'Usage', 'axle-ai-guard' ) . '</h2>';
-		echo '<ul class="aag-cards" data-aag-cards></ul>';
-		echo '<p class="description">' . esc_html(
+		echo '<div class="axle-stats" data-aag-cards></div>';
+		echo '<p class="axle-muted">' . esc_html(
 			sprintf(
 				/* translators: %s: date. */
 				__( 'Costs are estimates from the price table (prices as of %s), not your provider bill.', 'axle-ai-guard' ),
@@ -407,16 +429,16 @@ final class Page implements Service {
 		$names = array_unique( array_merge( array_keys( $this->settings->callers() ), array_keys( $by_name ) ) );
 		sort( $names );
 
-		echo '<section class="aag-section" aria-labelledby="aag-callers-title"><h2 id="aag-callers-title">' . esc_html__( 'Plugins making AI calls this month', 'axle-ai-guard' ) . '</h2>';
+		echo '<section class="axle-card" aria-labelledby="aag-callers-title"><h2 class="axle-card__title" id="aag-callers-title">' . esc_html__( 'Plugins making AI calls this month', 'axle-ai-guard' ) . '</h2>';
+		if ( ! $names ) {
+			echo '<div class="axle-empty aag-empty"><p>' . esc_html__( 'No AI calls yet. Plugins show up here after their first call, with their usage and a switch to turn them off.', 'axle-ai-guard' ) . '</p></div></section>';
+			return;
+		}
 		echo '<table class="widefat striped aag-table aag-callers"><thead><tr>';
 		foreach ( array( __( 'Caller', 'axle-ai-guard' ), __( 'Calls', 'axle-ai-guard' ), __( 'Tokens', 'axle-ai-guard' ), __( 'Cost', 'axle-ai-guard' ), __( 'Monthly budget', 'axle-ai-guard' ), __( 'Last call', 'axle-ai-guard' ), __( 'Status', 'axle-ai-guard' ), __( 'Kill switch', 'axle-ai-guard' ) ) as $head ) {
 			echo '<th scope="col">' . esc_html( $head ) . '</th>';
 		}
 		echo '</tr></thead><tbody>';
-
-		if ( ! $names ) {
-			echo '<tr><td colspan="8" class="aag-empty">' . esc_html__( 'No AI calls yet. Plugins show up here after their first call.', 'axle-ai-guard' ) . '</td></tr>';
-		}
 
 		foreach ( $names as $name ) {
 			$row    = $by_name[ $name ] ?? array(
@@ -437,9 +459,9 @@ final class Page implements Service {
 			$this->budget_bar( 'plugin:' . $name );
 			echo '</td>';
 			echo '<td>' . esc_html( isset( $last[ $name ] ) ? self::when( $last[ $name ] ) : '-' ) . '</td>';
-			echo '<td>' . esc_html( $killed ? __( 'Switched off', 'axle-ai-guard' ) : self::status_label( $status ) ) . '</td>';
+			echo '<td>' . ( $killed ? '<span class="axle-badge axle-badge--error">' . esc_html__( 'Switched off', 'axle-ai-guard' ) . '</span>' : self::status_badge( $status ) ) . '</td>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped in status_badge().
 			echo '<td>';
-			$this->kill_button( 'plugin', $name, ! $killed, $killed ? __( 'Turn on', 'axle-ai-guard' ) : __( 'Switch off', 'axle-ai-guard' ), $killed ? 'button button-primary' : 'button' );
+			$this->kill_button( 'plugin', $name, ! $killed, $killed ? __( 'Turn on', 'axle-ai-guard' ) : __( 'Switch off', 'axle-ai-guard' ) );
 			echo '</td></tr>';
 		}
 		echo '</tbody></table></section>';
@@ -459,6 +481,21 @@ final class Page implements Service {
 		);
 
 		return $map[ $status ] ?? __( 'Allowed', 'axle-ai-guard' );
+	}
+
+	/**
+	 * A caller's approval status as a badge.
+	 *
+	 * @param string $status Status.
+	 * @return string HTML.
+	 */
+	private static function status_badge( string $status ): string {
+		$tones = array(
+			'pending' => 'warning',
+			'denied'  => 'error',
+		);
+
+		return '<span class="axle-badge axle-badge--' . esc_attr( $tones[ $status ] ?? 'good' ) . '">' . esc_html( self::status_label( $status ) ) . '</span>';
 	}
 
 	/**
@@ -483,7 +520,7 @@ final class Page implements Service {
 		$used   = $this->policy->used( $subject );
 		$key    = $budget['monthly_cost'] > 0 ? 'monthly_cost' : ( $budget['monthly_tokens'] > 0 ? 'monthly_tokens' : '' );
 		if ( '' === $key ) {
-			echo '<span class="aag-muted">' . esc_html__( 'None', 'axle-ai-guard' ) . '</span>';
+			echo '<span class="axle-muted">' . esc_html__( 'No budget', 'axle-ai-guard' ) . '</span>';
 			return;
 		}
 
@@ -493,13 +530,18 @@ final class Page implements Service {
 			: sprintf( '%s / %s', number_format_i18n( $used[ $key ] ), number_format_i18n( $budget[ $key ] ) );
 		$pct   = (int) min( 100, round( $used[ $key ] / max( 1, $budget[ $key ] ) * 100 ) );
 
+		$full = $pct >= 100;
+		$soft = ! $full && $pct >= (int) $this->settings->get( 'soft_ratio' );
+		$word = $full ? '<span class="axle-badge axle-badge--error">' . esc_html__( 'Limit reached', 'axle-ai-guard' ) . '</span>' : ( $soft ? '<span class="axle-badge axle-badge--warning">' . esc_html__( 'Near the limit', 'axle-ai-guard' ) . '</span>' : '' );
+
 		printf(
-			'<span class="aag-bar%1$s"><progress max="100" value="%2$d" aria-label="%3$s"></progress> <span>%4$s</span></span>',
-			$pct >= 100 ? ' aag-bar-full' : ( $pct >= (int) $this->settings->get( 'soft_ratio' ) ? ' aag-bar-soft' : '' ),
+			'<span class="aag-bar%1$s"><progress max="100" value="%2$d" aria-label="%3$s"></progress> <span>%4$s</span> %5$s</span>',
+			$full ? ' aag-bar-full' : ( $soft ? ' aag-bar-soft' : '' ),
 			(int) $pct,
 			/* translators: 1: subject, 2: percentage. */
 			esc_attr( sprintf( __( 'Budget of %1$s: %2$d%% used', 'axle-ai-guard' ), $subject, $pct ) ),
-			esc_html( $text )
+			esc_html( $text ),
+			$word // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Built from escaped strings above.
 		);
 	}
 
@@ -508,10 +550,10 @@ final class Page implements Service {
 	 */
 	private function render_breakdown(): void {
 		$rows = $this->calls->breakdown( 'model', gmdate( 'Y-m-01 00:00:00' ) );
-		echo '<section class="aag-section" aria-labelledby="aag-models-title"><h2 id="aag-models-title">' . esc_html__( 'Providers and models this month', 'axle-ai-guard' ) . '</h2>';
+		echo '<section class="axle-card" aria-labelledby="aag-models-title"><h2 class="axle-card__title" id="aag-models-title">' . esc_html__( 'Providers and models this month', 'axle-ai-guard' ) . '</h2>';
 		$providers = $this->reports->usage( 'month', 'provider' );
 		if ( ! $providers && ! $rows ) {
-			echo '<p class="aag-muted">' . esc_html__( 'Nothing yet.', 'axle-ai-guard' ) . '</p></section>';
+			echo '<div class="axle-empty aag-empty"><p>' . esc_html__( 'No provider has been called this month. Usage per provider and model shows up here after the first call.', 'axle-ai-guard' ) . '</p></div></section>';
 			return;
 		}
 
@@ -535,16 +577,16 @@ final class Page implements Service {
 	 * Switches that are on, and a form to switch off one provider or context.
 	 */
 	private function render_switches(): void {
-		echo '<section class="aag-section" aria-labelledby="aag-switches-title"><h2 id="aag-switches-title">' . esc_html__( 'Kill switches that are on', 'axle-ai-guard' ) . '</h2>';
+		echo '<section class="axle-card" aria-labelledby="aag-switches-title"><h2 class="axle-card__title" id="aag-switches-title">' . esc_html__( 'Kill switches that are on', 'axle-ai-guard' ) . '</h2>';
 		$active = $this->kill->active();
 		if ( ! $active ) {
-			echo '<p class="aag-muted">' . esc_html__( 'None.', 'axle-ai-guard' ) . '</p>';
+			echo '<p class="axle-muted">' . esc_html__( 'None. Every provider and context is allowed.', 'axle-ai-guard' ) . '</p>';
 		} else {
 			echo '<ul class="aag-switches">';
 			foreach ( $active as $entry ) {
 				$user = $entry['by'] ? get_userdata( $entry['by'] ) : null;
 				echo '<li><strong>' . esc_html( ucfirst( KillSwitch::describe( $entry['scope'], $entry['subject'] ) ) ) . '</strong> ';
-				echo '<span class="aag-muted">' . esc_html(
+				echo '<span class="axle-muted">' . esc_html(
 					trim(
 						( '' !== $entry['reason'] ? $entry['reason'] . '. ' : '' ) .
 						( $entry['at'] ? sprintf( /* translators: 1: date, 2: who. */ __( 'Since %1$s, by %2$s.', 'axle-ai-guard' ), wp_date( 'Y-m-d H:i', $entry['at'] ), $user ? $user->display_name : __( 'AI Guard', 'axle-ai-guard' ) ) : '' )
@@ -565,7 +607,8 @@ final class Page implements Service {
 		foreach ( self::context_labels() as $context => $label ) {
 			echo '<option value="' . esc_attr( $context ) . '">' . esc_html( $label ) . '</option>';
 		}
-		echo '</select> <button type="submit" class="button">' . esc_html__( 'Switch off', 'axle-ai-guard' ) . '</button></form>';
+		echo '</select> <button type="submit" class="button axle-button--danger">' . esc_html__( 'Switch off', 'axle-ai-guard' ) . '</button></form>';
+		echo '<p class="axle-muted">' . esc_html__( 'Calls from that context are blocked until you turn it back on. You can undo it here.', 'axle-ai-guard' ) . '</p>';
 		echo '</section>';
 	}
 
@@ -596,9 +639,9 @@ final class Page implements Service {
 			)
 		)['rows'];
 
-		echo '<section class="aag-section" aria-labelledby="aag-blocks-title"><h2 id="aag-blocks-title">' . esc_html__( 'Recent blocks', 'axle-ai-guard' ) . '</h2>';
+		echo '<section class="axle-card" aria-labelledby="aag-blocks-title"><h2 class="axle-card__title" id="aag-blocks-title">' . esc_html__( 'Recent blocks', 'axle-ai-guard' ) . '</h2>';
 		if ( ! $rows ) {
-			echo '<p class="aag-muted">' . esc_html__( 'No blocked calls.', 'axle-ai-guard' ) . '</p></section>';
+			echo '<div class="axle-empty aag-empty"><p>' . esc_html__( 'No calls were blocked. A call is blocked by a budget, a data rule or a kill switch, and shows up here.', 'axle-ai-guard' ) . '</p></div></section>';
 			return;
 		}
 		echo '<table class="widefat striped aag-table aag-blocks"><thead><tr><th scope="col">' . esc_html__( 'When', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Caller', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Rule', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Context', 'axle-ai-guard' ) . '</th></tr></thead><tbody>';
@@ -678,8 +721,8 @@ final class Page implements Service {
 		echo '<span class="aag-filter"><label for="aag-filter-date">' . esc_html__( 'Date', 'axle-ai-guard' ) . '</label> <input type="date" id="aag-filter-date" name="date" value="' . esc_attr( $filters['date'] ) . '"></span> ';
 		echo '<button type="submit" class="button">' . esc_html__( 'Filter', 'axle-ai-guard' ) . '</button></form>';
 
-		echo '<p class="aag-count">' . esc_html( sprintf( /* translators: %s: number of calls. */ _n( '%s call', '%s calls', $result['total'], 'axle-ai-guard' ), number_format_i18n( $result['total'] ) ) ) . '</p>';
-		echo '<div class="aag-calls" data-aag-calls><p class="aag-muted">' . esc_html__( 'Loading...', 'axle-ai-guard' ) . '</p></div>';
+		echo '<p class="aag-count axle-muted">' . esc_html( sprintf( /* translators: %s: number of calls. */ _n( '%s call', '%s calls', $result['total'], 'axle-ai-guard' ), number_format_i18n( $result['total'] ) ) ) . '</p>';
+		echo '<div class="axle-card aag-calls" data-aag-calls><p class="axle-muted"><span class="spinner is-active aag-spinner"></span> ' . esc_html__( 'Loading calls', 'axle-ai-guard' ) . '</p></div>';
 
 		$pages = (int) ceil( $result['total'] / 50 );
 		if ( $pages > 1 ) {
@@ -697,7 +740,7 @@ final class Page implements Service {
 			echo '</nav>';
 		}
 
-		echo '<dialog class="aag-modal" aria-labelledby="aag-modal-title"><div class="aag-modal-inner"><h2 id="aag-modal-title">' . esc_html__( 'Call details', 'axle-ai-guard' ) . '</h2><div class="aag-modal-body" data-aag-detail></div><p><button type="button" class="button aag-modal-close">' . esc_html__( 'Close', 'axle-ai-guard' ) . '</button></p></div></dialog>';
+		echo '<dialog class="aag-modal axle-ui" aria-labelledby="aag-modal-title"><div class="aag-modal-inner"><h2 class="axle-card__title" id="aag-modal-title">' . esc_html__( 'Call details', 'axle-ai-guard' ) . '</h2><div class="aag-modal-body" data-aag-detail></div><p><button type="button" class="button aag-modal-close">' . esc_html__( 'Close', 'axle-ai-guard' ) . '</button></p></div></dialog>';
 	}
 
 	/**
@@ -729,7 +772,7 @@ final class Page implements Service {
 		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="aag-budgets">';
 		self::form_fields( 'budgets' );
 
-		echo '<h2>' . esc_html__( 'Rate limits', 'axle-ai-guard' ) . '</h2>';
+		echo '<section class="axle-card"><h2 class="axle-card__title">' . esc_html__( 'Rate limits', 'axle-ai-guard' ) . '</h2>';
 		echo '<p class="description">' . esc_html__( 'Calls per minute. 0 turns a limit off.', 'axle-ai-guard' ) . '</p>';
 		echo '<table class="form-table" role="presentation"><tbody>';
 		$rates = array(
@@ -752,9 +795,9 @@ final class Page implements Service {
 			(int) $all['soft_ratio'],
 			esc_html__( '% of a budget', 'axle-ai-guard' )
 		);
-		echo '</tbody></table>';
+		echo '</tbody></table></section>';
 
-		echo '<h2>' . esc_html__( 'Budgets and rules', 'axle-ai-guard' ) . '</h2>';
+		echo '<section class="axle-card"><h2 class="axle-card__title">' . esc_html__( 'Budgets and rules', 'axle-ai-guard' ) . '</h2>';
 		echo '<p class="description">' . esc_html(
 			sprintf(
 				/* translators: %s: currency code. */
@@ -775,6 +818,7 @@ final class Page implements Service {
 		}
 
 		echo '<p><label for="aag-new-subject">' . esc_html__( 'Add a plugin by its folder name', 'axle-ai-guard' ) . '</label> <input type="text" id="aag-new-subject" name="new_subject" class="regular-text"></p>';
+		echo '</section>';
 		submit_button( __( 'Save budgets and limits', 'axle-ai-guard' ) );
 		echo '</form>';
 
@@ -793,7 +837,7 @@ final class Page implements Service {
 		$name   = 'policy[' . $subject . ']';
 		$title  = 'global' === $subject ? __( 'Whole site', 'axle-ai-guard' ) : substr( $subject, strpos( $subject, ':' ) + 1 );
 
-		echo '<fieldset class="aag-policy" data-subject="' . esc_attr( $subject ) . '"><legend>' . esc_html( $title ) . '</legend><div class="aag-grid">';
+		echo '<fieldset class="aag-policy" data-subject="' . esc_attr( $subject ) . '"><legend class="aag-policy-title">' . esc_html( $title ) . '</legend><div class="aag-grid">';
 		$fields = array(
 			'daily_tokens'   => array( __( 'Tokens per day', 'axle-ai-guard' ), $policy['daily_tokens'] ? (string) $policy['daily_tokens'] : '' ),
 			'monthly_tokens' => array( __( 'Tokens per month', 'axle-ai-guard' ), $policy['monthly_tokens'] ? (string) $policy['monthly_tokens'] : '' ),
@@ -850,28 +894,28 @@ final class Page implements Service {
 	 * Callers waiting for approval, and denied ones.
 	 */
 	private function render_approvals(): void {
-		echo '<h2>' . esc_html__( 'Callers', 'axle-ai-guard' ) . '</h2>';
+		echo '<section class="axle-card"><h2 class="axle-card__title">' . esc_html__( 'Callers', 'axle-ai-guard' ) . '</h2>';
 		$callers = $this->settings->callers();
 		if ( ! $callers ) {
-			echo '<p class="aag-muted">' . esc_html__( 'No caller has made an AI call yet.', 'axle-ai-guard' ) . '</p>';
+			echo '<div class="axle-empty aag-empty"><p>' . esc_html__( 'No plugin has made an AI call yet. Plugins show up here after their first call, where you can approve or deny them.', 'axle-ai-guard' ) . '</p></div></section>';
 			return;
 		}
 		echo '<table class="widefat striped aag-table aag-approvals"><thead><tr><th scope="col">' . esc_html__( 'Caller', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Type', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'First seen in', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Status', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Change', 'axle-ai-guard' ) . '</th></tr></thead><tbody>';
 		foreach ( $callers as $key => $caller ) {
 			$status = (string) ( $caller['status'] ?? 'approved' );
-			echo '<tr><th scope="row"><code>' . esc_html( (string) $key ) . '</code></th><td>' . esc_html( (string) ( $caller['type'] ?? '' ) ) . '</td><td><code>' . esc_html( (string) ( $caller['file'] ?? '' ) ) . '</code></td><td>' . esc_html( self::status_label( $status ) ) . '</td><td>';
+			echo '<tr><th scope="row"><code>' . esc_html( (string) $key ) . '</code></th><td>' . esc_html( (string) ( $caller['type'] ?? '' ) ) . '</td><td><code>' . esc_html( (string) ( $caller['file'] ?? '' ) ) . '</code></td><td>' . self::status_badge( $status ) . '</td><td>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped in status_badge().
 			echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="aag-inline-form">';
 			self::form_fields( 'callers' );
 			echo '<input type="hidden" name="caller" value="' . esc_attr( (string) $key ) . '">';
 			if ( 'approved' !== $status ) {
-				echo '<button type="submit" name="status" value="approved" class="button button-primary">' . esc_html__( 'Approve', 'axle-ai-guard' ) . '</button> ';
+				echo '<button type="submit" name="status" value="approved" class="button">' . esc_html__( 'Approve', 'axle-ai-guard' ) . '</button> ';
 			}
 			if ( 'denied' !== $status ) {
 				echo '<button type="submit" name="status" value="denied" class="button">' . esc_html__( 'Deny', 'axle-ai-guard' ) . '</button>';
 			}
 			echo '</form></td></tr>';
 		}
-		echo '</tbody></table>';
+		echo '</tbody></table></section>';
 	}
 
 	/**
@@ -885,9 +929,10 @@ final class Page implements Service {
 			'block'  => __( 'Block', 'axle-ai-guard' ),
 		);
 
-		echo '<p class="description">' . esc_html__( 'Each detector looks at what a call sends. Log records that it was found. Redact replaces it with a placeholder before the request leaves the site. Block stops the call. Files sent with a prompt cannot be scanned; block them per plugin under Budgets and limits.', 'axle-ai-guard' ) . '</p>';
 		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">';
 		self::form_fields( 'rules' );
+		echo '<section class="axle-card"><h2 class="axle-card__title">' . esc_html__( 'Detectors', 'axle-ai-guard' ) . '</h2>';
+		echo '<p class="description">' . esc_html__( 'Each detector looks at what a call sends. Log records that it was found. Redact replaces it with a placeholder before the request leaves the site. Block stops the call. Files sent with a prompt cannot be scanned; block them per plugin under Budgets and limits.', 'axle-ai-guard' ) . '</p>';
 		echo '<table class="widefat striped aag-table aag-rules"><thead><tr><th scope="col">' . esc_html__( 'Detector', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Mode', 'axle-ai-guard' ) . '</th></tr></thead><tbody>';
 		foreach ( $this->detectors->all() as $id => $detector ) {
 			if ( 0 === strpos( $id, 'custom-' ) ) {
@@ -899,9 +944,9 @@ final class Page implements Service {
 			}
 			echo '</select></td></tr>';
 		}
-		echo '</tbody></table>';
+		echo '</tbody></table></section>';
 
-		echo '<h2>' . esc_html__( 'Custom rules', 'axle-ai-guard' ) . '</h2>';
+		echo '<section class="axle-card"><h2 class="axle-card__title">' . esc_html__( 'Custom rules', 'axle-ai-guard' ) . '</h2>';
 		echo '<p class="description">' . esc_html__( 'A string matches without regard to case. A regex needs delimiters, such as /ORD-\d{6}/.', 'axle-ai-guard' ) . '</p>';
 		echo '<table class="widefat striped aag-table aag-custom"><thead><tr><th scope="col">' . esc_html__( 'Label', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Type', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Pattern', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Mode', 'axle-ai-guard' ) . '</th></tr></thead><tbody>';
 		$custom   = $this->detectors->custom();
@@ -924,7 +969,7 @@ final class Page implements Service {
 			}
 			echo '</select></td></tr>';
 		}
-		echo '</tbody></table>';
+		echo '</tbody></table></section>';
 		submit_button( __( 'Save data rules', 'axle-ai-guard' ) );
 		echo '</form>';
 
@@ -937,7 +982,7 @@ final class Page implements Service {
 	private function render_test_box(): void {
 		$result = get_transient( 'axle_ai_guard_test_' . get_current_user_id() );
 
-		echo '<section class="aag-section aag-test" aria-labelledby="aag-test-title"><h2 id="aag-test-title">' . esc_html__( 'Test the rules', 'axle-ai-guard' ) . '</h2>';
+		echo '<section class="axle-card aag-test" aria-labelledby="aag-test-title"><h2 class="axle-card__title" id="aag-test-title">' . esc_html__( 'Test the rules', 'axle-ai-guard' ) . '</h2>';
 		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">';
 		self::form_fields( 'test_rules' );
 		echo '<p><label for="aag-test-text">' . esc_html__( 'Paste text. Nothing is sent to any AI provider.', 'axle-ai-guard' ) . '</label></p>';
@@ -948,14 +993,14 @@ final class Page implements Service {
 		if ( is_array( $result ) ) {
 			echo '<div class="aag-test-result" role="status">';
 			if ( ! $result['findings'] ) {
-				echo '<p>' . esc_html__( 'Nothing found.', 'axle-ai-guard' ) . '</p>';
+				echo '<p><span class="axle-badge axle-badge--good">' . esc_html__( 'Nothing found', 'axle-ai-guard' ) . '</span></p>';
 			} else {
-				echo '<p><strong>' . esc_html( $result['blocked'] ? __( 'A call with this text would be blocked.', 'axle-ai-guard' ) : __( 'A call with this text would go out.', 'axle-ai-guard' ) ) . '</strong></p><ul>';
+				echo '<p><span class="axle-badge axle-badge--' . ( $result['blocked'] ? 'error' : 'info' ) . '">' . esc_html( $result['blocked'] ? __( 'Would be blocked', 'axle-ai-guard' ) : __( 'Would go out', 'axle-ai-guard' ) ) . '</span> <strong>' . esc_html( $result['blocked'] ? __( 'A call with this text would be blocked.', 'axle-ai-guard' ) : __( 'A call with this text would go out.', 'axle-ai-guard' ) ) . '</strong></p><ul>';
 				foreach ( $result['findings'] as $finding ) {
 					/* translators: 1: detector label, 2: count, 3: mode. */
 					echo '<li>' . esc_html( sprintf( __( '%1$s: %2$d found, mode %3$s', 'axle-ai-guard' ), $finding['label'], $finding['count'], $finding['mode'] ) ) . '</li>';
 				}
-				echo '</ul><p>' . esc_html__( 'What the provider would get:', 'axle-ai-guard' ) . '</p><pre class="aag-pre">' . esc_html( (string) $result['redacted'] ) . '</pre>';
+				echo '</ul><p>' . esc_html__( 'What the provider would get:', 'axle-ai-guard' ) . '</p><pre class="axle-code aag-pre">' . esc_html( (string) $result['redacted'] ) . '</pre>';
 			}
 			echo '</div>';
 		}
@@ -966,6 +1011,7 @@ final class Page implements Service {
 	 * Prices tab.
 	 */
 	private function render_prices(): void {
+		echo '<section class="axle-card"><h2 class="axle-card__title">' . esc_html__( 'Price table', 'axle-ai-guard' ) . '</h2>';
 		echo '<p class="description">' . esc_html(
 			sprintf(
 				/* translators: 1: date, 2: currency. */
@@ -1001,11 +1047,17 @@ final class Page implements Service {
 			}
 			echo '</tr>';
 		}
-		echo '</tbody></table><p class="submit">';
-		echo '<button type="submit" name="do" value="save" class="button button-primary">' . esc_html__( 'Save prices', 'axle-ai-guard' ) . '</button> ';
-		echo '<button type="submit" name="do" value="recalc" class="button">' . esc_html__( 'Recalculate the last 30 days', 'axle-ai-guard' ) . '</button> ';
-		echo '<button type="submit" name="do" value="reset" class="button">' . esc_html__( 'Back to the shipped prices', 'axle-ai-guard' ) . '</button>';
-		echo '</p></form>';
+		echo '</tbody></table>';
+		echo '<p class="submit"><button type="submit" name="do" value="save" class="button button-primary">' . esc_html__( 'Save prices', 'axle-ai-guard' ) . '</button></p>';
+		echo '</section></form>';
+
+		echo '<section class="axle-card axle-card--danger"><h2 class="axle-card__title">' . esc_html__( 'Replace costs or prices', 'axle-ai-guard' ) . '</h2>';
+		echo '<p>' . esc_html__( 'Recalculating overwrites the stored cost of every call from the last 30 days with the current prices. Going back to the shipped prices removes your edits. Neither can be undone.', 'axle-ai-guard' ) . '</p>';
+		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="axle-actions">';
+		self::form_fields( 'prices' );
+		echo '<button type="submit" name="do" value="recalc" class="button axle-button--danger">' . esc_html__( 'Recalculate the last 30 days', 'axle-ai-guard' ) . '</button> ';
+		echo '<button type="submit" name="do" value="reset" class="button axle-button--danger">' . esc_html__( 'Back to the shipped prices', 'axle-ai-guard' ) . '</button>';
+		echo '</form></section>';
 	}
 
 	/**
@@ -1020,6 +1072,7 @@ final class Page implements Service {
 
 		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">';
 		self::form_fields( 'settings' );
+		echo '<section class="axle-card"><h2 class="axle-card__title">' . esc_html__( 'Plugins and money', 'axle-ai-guard' ) . '</h2>';
 		echo '<table class="form-table" role="presentation"><tbody>';
 
 		echo '<tr><th scope="row"><label for="aag-new_caller">' . esc_html__( 'A plugin making its first AI call', 'axle-ai-guard' ) . '</label></th><td><select id="aag-new_caller" name="settings[new_caller]">';
@@ -1033,19 +1086,31 @@ final class Page implements Service {
 		echo '</select></td></tr>';
 
 		self::text_row( 'currency', __( 'Currency (ISO code)', 'axle-ai-guard' ), (string) $all['currency'], 'small-text' );
+		echo '</tbody></table></section>';
+
+		echo '<section class="axle-card"><h2 class="axle-card__title">' . esc_html__( 'What is kept', 'axle-ai-guard' ) . '</h2>';
+		echo '<table class="form-table" role="presentation"><tbody>';
 		self::number_row( 'retention_calls', __( 'Keep calls for (days)', 'axle-ai-guard' ), (int) $all['retention_calls'] );
 		self::number_row( 'retention_usage', __( 'Keep usage totals for (days)', 'axle-ai-guard' ), (int) $all['retention_usage'] );
 		self::check_row( 'store_preview', __( 'Previews', 'axle-ai-guard' ), __( 'Store the first 300 characters of each prompt, after redaction', 'axle-ai-guard' ), (bool) $all['store_preview'] );
 		self::check_row( 'store_prompts', __( 'Prompt store', 'axle-ai-guard' ), __( 'Store each full prompt, with every finding redacted, for debugging', 'axle-ai-guard' ), (bool) $all['store_prompts'] );
 		self::number_row( 'retention_prompts', __( 'Keep stored prompts for (days)', 'axle-ai-guard' ), (int) $all['retention_prompts'] );
+		echo '</tbody></table></section>';
+
+		echo '<section class="axle-card"><h2 class="axle-card__title">' . esc_html__( 'Alerts', 'axle-ai-guard' ) . '</h2>';
+		echo '<table class="form-table" role="presentation"><tbody>';
 		self::check_row( 'alert_email', __( 'Email alerts', 'axle-ai-guard' ), __( 'Email alerts for budgets, kill switches, data rule blocks, new plugins and error spikes', 'axle-ai-guard' ), (bool) $all['alert_email'] );
 		self::text_row( 'alert_recipients', __( 'Alert recipients (empty: the site admin email)', 'axle-ai-guard' ), (string) $all['alert_recipients'], 'regular-text' );
 		self::text_row( 'webhook_url', __( 'Alert webhook URL (JSON POST)', 'axle-ai-guard' ), (string) $all['webhook_url'], 'regular-text' );
+		echo '</tbody></table></section>';
+
+		echo '<section class="axle-card"><h2 class="axle-card__title">' . esc_html__( 'Monitoring and automatic switch-off', 'axle-ai-guard' ) . '</h2>';
+		echo '<table class="form-table" role="presentation"><tbody>';
 		self::check_row( 'direct_monitoring', __( 'Direct calls', 'axle-ai-guard' ), __( 'Watch requests to known AI provider hosts that skip the AI Client', 'axle-ai-guard' ), (bool) $all['direct_monitoring'] );
 		self::check_row( 'autotrip_budget', __( 'Budget auto-trip', 'axle-ai-guard' ), __( 'Switch all AI off when the monthly money budget of the whole site is reached', 'axle-ai-guard' ), (bool) $all['autotrip_budget'] );
 		self::number_row( 'autotrip_errors', __( 'Switch all AI off when this % of calls fail in 5 minutes (0: never)', 'axle-ai-guard' ), (int) $all['autotrip_errors'] );
+		echo '</tbody></table></section>';
 
-		echo '</tbody></table>';
 		submit_button( __( 'Save settings', 'axle-ai-guard' ) );
 		echo '</form>';
 	}
