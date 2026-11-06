@@ -62,8 +62,12 @@
 		list.textContent = '';
 		cards.forEach( ( card ) => {
 			const value = 'cost' === card.kind ? formatCost( Number( card.value ) || 0, data.currency ) : Number( card.value || 0 ).toLocaleString();
+			const tone = 'blocked' === String( card.id ).split( '-' ).pop() && Number( card.value ) > 0 ? ' axle-stat--warning' : '';
 			list.append(
-				el( 'li', { class: 'aag-card', 'data-card': card.id }, [ el( 'span', { class: 'aag-card-value', text: value } ), el( 'span', { class: 'aag-card-label', text: card.label } ) ] )
+				el( 'div', { class: 'axle-stat aag-card' + tone, 'data-card': card.id }, [
+					el( 'span', { class: 'axle-stat__value aag-card-value', text: value } ),
+					el( 'span', { class: 'axle-stat__label aag-card-label', text: card.label } ),
+				] )
 			);
 		} );
 	}
@@ -104,11 +108,17 @@
 			} );
 	} );
 
+	/** The Axle tone of a call status. */
+	function statusTone( status ) {
+		const tones = { ok: 'good', error: 'error', blocked: 'error', pending: 'info' };
+		return tones[ status ] || 'neutral';
+	}
+
 	function defaultColumns() {
 		return [
 			{ key: 'started_at', label: __( 'When', 'axle-ai-guard' ), render: ( call ) => new Date( call.started_at ).toLocaleString() },
 			{ key: 'caller', label: __( 'Caller', 'axle-ai-guard' ), render: ( call ) => el( 'code', { text: call.caller } ) },
-			{ key: 'status', label: __( 'Status', 'axle-ai-guard' ), render: ( call ) => el( 'span', { class: 'aag-pill aag-pill-' + call.status, text: call.status + ( call.block_rule ? ': ' + call.block_rule : '' ) } ) },
+			{ key: 'status', label: __( 'Status', 'axle-ai-guard' ), render: ( call ) => el( 'span', { class: 'axle-badge axle-badge--' + statusTone( call.status ) + ' aag-pill aag-pill-' + call.status, text: call.status + ( call.block_rule ? ': ' + call.block_rule : '' ) } ) },
 			{ key: 'model', label: __( 'Provider and model', 'axle-ai-guard' ), render: ( call ) => [ call.provider, call.model ].filter( Boolean ).join( ' / ' ) || '-' },
 			{ key: 'tokens', label: __( 'Tokens', 'axle-ai-guard' ), render: ( call ) => call.total_tokens.toLocaleString() + ( call.estimated ? ' ' + __( '(estimated)', 'axle-ai-guard' ) : '' ) },
 			{ key: 'cost', label: __( 'Cost', 'axle-ai-guard' ), render: ( call ) => formatCost( call.cost_micros, call.currency || data.currency ) },
@@ -131,15 +141,18 @@
 			return;
 		}
 		const columns = filter( 'axleAiGuard.callColumns', defaultColumns() );
+		if ( ! data.calls.length ) {
+			holder.textContent = '';
+			holder.classList.remove( 'axle-card' );
+			holder.append( el( 'div', { class: 'axle-empty aag-empty' }, [ el( 'p', { text: __( 'No calls match these filters. Clear a filter, or wait for a plugin to make an AI call.', 'axle-ai-guard' ) } ) ] ) );
+			return;
+		}
 		const table = el( 'table', { class: 'widefat striped aag-table aag-calls-table' } );
 		const head = el( 'tr' );
 		columns.forEach( ( column ) => head.append( el( 'th', { scope: 'col', 'data-column': column.key, text: column.label } ) ) );
 		table.append( el( 'thead', {}, [ head ] ) );
 
 		const body = el( 'tbody' );
-		if ( ! data.calls.length ) {
-			body.append( el( 'tr', {}, [ el( 'td', { colspan: String( columns.length ), class: 'aag-empty', text: __( 'No calls match.', 'axle-ai-guard' ) } ) ] ) );
-		}
 		data.calls.forEach( ( call ) => {
 			const row = el( 'tr', { 'data-id': String( call.id ) } );
 			columns.forEach( ( column ) => {
@@ -176,7 +189,7 @@
 			[ __( 'Redacted', 'axle-ai-guard' ), redacted || '-' ],
 			[ __( 'Preview', 'axle-ai-guard' ), null === call.preview || undefined === call.preview ? __( 'Not stored', 'axle-ai-guard' ) : call.preview ],
 		];
-		const list = el( 'dl', { class: 'aag-detail' } );
+		const list = el( 'dl', { class: 'axle-facts aag-detail' } );
 		rows.forEach( ( [ term, value ] ) => list.append( el( 'dt', { text: term } ), el( 'dd', { text: value } ) ) );
 		return list;
 	}
@@ -189,7 +202,7 @@
 		if ( button && dialog && window.wp && window.wp.apiFetch ) {
 			opener = button;
 			const body = dialog.querySelector( '[data-aag-detail]' );
-			body.textContent = __( 'Loading...', 'axle-ai-guard' );
+			body.textContent = __( 'Loading the call', 'axle-ai-guard' );
 			dialog.showModal();
 			window.wp.apiFetch( { path: '/axle-ai-guard/v1/calls/' + button.dataset.id } ).then( ( call ) => {
 				body.textContent = '';

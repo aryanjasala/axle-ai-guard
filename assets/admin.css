@@ -1,22 +1,11 @@
-/* Tools > AI Guard. */
+/* Tools > AI Guard. Layout only: the look comes from axle-ui.css. Prefix: aag- */
 
 .aag-wrap .aag-tabs {
-	margin-bottom: 16px;
+	margin-bottom: 8px;
 }
 
 .aag-section {
-	margin: 24px 0;
-}
-
-.aag-status {
-	font-size: 14px;
-}
-
-.aag-status-off {
-	padding: 10px 14px;
-	border-left: 4px solid #d63638;
-	background: #fcf0f1;
-	font-weight: 600;
+	margin: 0 0 24px;
 }
 
 .aag-inline-form,
@@ -28,78 +17,37 @@
 	margin: 0;
 }
 
-.aag-wrap .button.aag-danger {
-	border-color: #b32d2e;
-	color: #b32d2e;
-}
-
-.aag-cards {
-	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-	gap: 12px;
-	margin: 0;
-	padding: 0;
-	list-style: none;
-}
-
-.aag-card {
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
-	margin: 0;
-	padding: 14px 16px;
-	border: 1px solid #c3c4c7;
-	border-radius: 4px;
-	background: #fff;
-}
-
-.aag-card-value {
-	font-size: 22px;
-	font-weight: 600;
-	line-height: 1.2;
-}
-
-.aag-card-label {
-	color: #50575e;
-}
-
 .aag-table td,
 .aag-table th {
 	vertical-align: middle;
 }
 
-.aag-table .aag-empty {
-	padding: 24px 12px;
-	color: #50575e;
-	text-align: center;
-}
-
-.aag-muted {
-	color: #50575e;
-}
-
 .aag-models {
-	margin-bottom: 12px;
+	margin-bottom: 16px;
 }
 
 .aag-bar {
 	display: inline-flex;
+	flex-wrap: wrap;
 	align-items: center;
 	gap: 6px;
-	white-space: nowrap;
 }
 
 .aag-bar progress {
 	width: 90px;
-	accent-color: #2271b1;
+	accent-color: var(--axle-accent);
 }
 
 .aag-bar-soft progress {
-	accent-color: #996800;
+	accent-color: var(--axle-warning-line);
 }
 
 .aag-bar-full progress {
-	accent-color: #b32d2e;
+	accent-color: var(--axle-error-line);
+}
+
+.aag-switches {
+	margin: 0 0 16px;
 }
 
 .aag-switches li {
@@ -113,39 +61,20 @@
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
-	gap: 8px 14px;
-	margin: 12px 0;
+	gap: 8px 16px;
+	margin: 0 0 16px;
 }
 
-.aag-pill {
-	display: inline-block;
-	padding: 2px 8px;
-	border-radius: 10px;
-	background: #f0f0f1;
-	color: #1d2327;
-}
-
-.aag-pill-ok {
-	background: #edfaef;
-	color: #00450c;
-}
-
-.aag-pill-error {
-	background: #fcf0f1;
-	color: #8a2424;
-}
-
-.aag-pill-blocked {
-	background: #fcf9e8;
-	color: #614200;
+.aag-calls {
+	overflow-x: auto;
 }
 
 .aag-modal {
-	max-width: 720px;
 	width: calc(100% - 40px);
+	max-width: 720px;
 	padding: 0;
-	border: 1px solid #c3c4c7;
-	border-radius: 4px;
+	border: 1px solid var(--axle-border);
+	border-radius: 2px;
 }
 
 .aag-modal::backdrop {
@@ -153,41 +82,29 @@
 }
 
 .aag-modal-inner {
-	padding: 16px 20px;
-}
-
-.aag-detail {
-	display: grid;
-	grid-template-columns: max-content 1fr;
-	gap: 6px 16px;
-	margin: 0;
-}
-
-.aag-detail dt {
-	font-weight: 600;
+	padding: 16px 24px;
 }
 
 .aag-detail dd {
-	margin: 0;
 	overflow-wrap: anywhere;
 }
 
 .aag-policy {
 	margin: 0 0 16px;
-	padding: 12px 16px;
-	border: 1px solid #c3c4c7;
-	background: #fff;
+	padding: 16px;
+	background: var(--axle-surface);
+	border: 1px solid var(--axle-border);
 }
 
-.aag-policy > legend {
-	padding: 0 6px;
+.aag-policy-title {
+	padding: 0 8px;
 	font-weight: 600;
 }
 
 .aag-grid {
 	display: flex;
 	flex-wrap: wrap;
-	gap: 8px 20px;
+	gap: 8px 24px;
 }
 
 .aag-grid p {
@@ -201,26 +118,25 @@
 	flex-basis: 100%;
 }
 
+.aag-grid input.small-text {
+	width: 9em;
+}
+
 .aag-contexts {
-	margin-top: 10px;
+	margin-top: 8px;
 }
 
 .aag-contexts label {
-	margin-right: 12px;
+	margin-right: 16px;
 }
 
-.aag-pre {
-	padding: 10px;
+.aag-wrap .axle-code.aag-pre {
+	display: block;
 	white-space: pre-wrap;
-	background: #f6f7f7;
-	border: 1px solid #dcdcde;
 }
 
+/* The admin bar is outside .axle-ui, so the error colours are written out. */
 #wpadminbar .aag-adminbar > .ab-item {
-	background: #b32d2e;
+	background: #8a2424;
 	color: #fff;
-}
-
-.aag-grid input.small-text {
-	width: 9em;
 }
