@@ -20,6 +20,7 @@ use AryanX\Axle\AiGuard\Reports;
 use AryanX\Axle\AiGuard\Runaway;
 use AryanX\Axle\AiGuard\Service;
 use AryanX\Axle\AiGuard\Settings;
+use AryanX\Axle\AiGuard\UserReport;
 use const AryanX\Axle\AiGuard\PLUGIN_FILE;
 use const AryanX\Axle\AiGuard\VERSION;
 
@@ -32,7 +33,7 @@ defined( 'ABSPATH' ) || exit;
 final class Page implements Service {
 
 	public const SLUG = 'axle-ai-guard';
-	public const TABS = array( 'overview', 'calls', 'budgets', 'rules', 'prices', 'settings' );
+	public const TABS = array( 'overview', 'calls', 'people', 'budgets', 'rules', 'prices', 'settings' );
 
 	/**
 	 * Settings.
@@ -138,7 +139,7 @@ final class Page implements Service {
 		add_action( 'admin_menu', array( $this, 'add_page' ) );
 		add_action( 'admin_notices', array( $this, 'notices' ) );
 		add_filter( 'plugin_action_links_' . plugin_basename( PLUGIN_FILE ), array( $this, 'action_links' ) );
-		foreach ( array( 'kill', 'budgets', 'callers', 'rules', 'prices', 'settings', 'runaway', 'steps' ) as $action ) {
+		foreach ( array( 'kill', 'budgets', 'callers', 'rules', 'prices', 'settings', 'runaway', 'steps', 'people_csv' ) as $action ) {
 			add_action( 'admin_post_axle_ai_guard_' . $action, array( $this, 'handle_' . $action ) );
 		}
 	}
@@ -334,6 +335,23 @@ final class Page implements Service {
 					'content' => '<p>' . esc_html__( 'Every AI call the guard saw, newest first. Use the filters to narrow the list, and open Details to see tokens, cost and what the data rules found.', 'axle-ai-guard' ) . '</p>',
 				),
 			),
+			'people'   => array(
+				array(
+					'id'      => 'overview',
+					'title'   => __( 'Overview', 'axle-ai-guard' ),
+					'content' => '<p>' . esc_html__( 'Who triggered the AI calls on this site, with their calls, tokens and cost for the period you pick. Calls that no logged-in person triggered, such as visitors, cron and WP-CLI, are listed as No user.', 'axle-ai-guard' ) . '</p>',
+				),
+				array(
+					'id'      => 'roles',
+					'title'   => __( 'Roles', 'axle-ai-guard' ),
+					'content' => '<p>' . esc_html__( 'Each user counts under their first role, as they have it now, so the role totals add up to the site total. If someone changed role during the period, all their calls count under the new one.', 'axle-ai-guard' ) . '</p>',
+				),
+				array(
+					'id'      => 'export',
+					'title'   => __( 'Download', 'axle-ai-guard' ),
+					'content' => '<p>' . esc_html__( 'Download the table as a CSV file for a spreadsheet. There is one row for each user and currency, with the cost as a plain number. The file has login names but no email addresses. When a person asks for their data to be erased, their calls move to No user.', 'axle-ai-guard' ) . '</p>',
+				),
+			),
 			'budgets'  => array(
 				array(
 					'id'      => 'overview',
@@ -517,6 +535,7 @@ final class Page implements Service {
 		$labels = array(
 			'overview' => __( 'Overview', 'axle-ai-guard' ),
 			'calls'    => __( 'Calls', 'axle-ai-guard' ),
+			'people'   => __( 'Users and roles', 'axle-ai-guard' ),
 			'budgets'  => __( 'Budgets and limits', 'axle-ai-guard' ),
 			'rules'    => __( 'Data rules', 'axle-ai-guard' ),
 			'prices'   => __( 'Prices', 'axle-ai-guard' ),
@@ -526,6 +545,7 @@ final class Page implements Service {
 		$intros = array(
 			'overview' => __( 'See which plugins make AI calls on this site, what they cost and what was blocked. The kill switch stops every call at once.', 'axle-ai-guard' ),
 			'calls'    => __( 'Every AI call the guard saw, newest first. Open a call to see its tokens, cost and what the data rules found.', 'axle-ai-guard' ),
+			'people'   => __( 'See who triggers AI calls and what each person and role costs, for a day, a week or a month. Download it as CSV.', 'axle-ai-guard' ),
 			'budgets'  => __( 'Set how many calls, tokens and how much money each plugin may use, and decide which plugins may call AI at all.', 'axle-ai-guard' ),
 			'rules'    => __( 'Choose what happens when a call is about to send personal data or text that matches your own rules.', 'axle-ai-guard' ),
 			'prices'   => __( 'The price table turns tokens into estimated costs. Edit it when your provider changes its prices.', 'axle-ai-guard' ),
@@ -1187,6 +1207,93 @@ final class Page implements Service {
 	}
 
 	/**
+	 * Users and roles tab: usage per person and per role, with CSV download.
+	 */
+	private function render_people(): void {
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only filter.
+		$wanted  = isset( $_GET['period'] ) ? sanitize_key( wp_unslash( $_GET['period'] ) ) : 'month';
+		$periods = UserReport::periods();
+		$period  = UserReport::period_key( $wanted );
+		$report  = $this->reports->user_usage( $period );
+
+		echo '<form method="get" class="aag-filters axle-toolbar" aria-label="' . esc_attr__( 'Choose a period', 'axle-ai-guard' ) . '">';
+		echo '<input type="hidden" name="page" value="' . esc_attr( self::SLUG ) . '"><input type="hidden" name="tab" value="people">';
+		echo '<span class="aag-filter"><label for="aag-period">' . esc_html__( 'Period', 'axle-ai-guard' ) . '</label> <select id="aag-period" name="period">';
+		foreach ( $periods as $key => $item ) {
+			echo '<option value="' . esc_attr( $key ) . '"' . selected( $key, $period, false ) . '>' . esc_html( $item['label'] ) . '</option>';
+		}
+		echo '</select></span> <button type="submit" class="button">' . esc_html__( 'Show', 'axle-ai-guard' ) . '</button></form>';
+
+		echo '<p class="aag-count axle-muted">' . esc_html(
+			sprintf(
+				/* translators: 1: period name, 2: first day, 3: last day (UTC). */
+				__( '%1$s: %2$s to %3$s (UTC).', 'axle-ai-guard' ),
+				$report['label'],
+				substr( $report['since'], 0, 10 ),
+				gmdate( 'Y-m-d', (int) strtotime( $report['until'] . ' UTC' ) - 1 )
+			)
+		) . '</p>';
+
+		if ( ! $report['users'] ) {
+			echo '<section class="axle-card"><div class="axle-empty aag-empty"><p>' . esc_html__( 'No AI calls in this period. When a plugin calls AI, the person who triggered it shows up here with their calls, tokens and cost. Pick a longer period to look further back.', 'axle-ai-guard' ) . '</p></div></section>';
+			return;
+		}
+
+		if ( $this->reports->unpriced_models() ) {
+			echo '<div class="notice notice-warning inline"><p>' . esc_html__( 'Some models have no price, so their calls count as a cost of zero here.', 'axle-ai-guard' ) . ' <a href="' . esc_url( self::url( 'prices' ) ) . '">' . esc_html__( 'Add the prices', 'axle-ai-guard' ) . '</a></p></div>';
+		}
+		if ( $report['truncated'] ) {
+			echo '<div class="notice notice-warning inline"><p>' . esc_html__( 'This site has more users than the report reads at once, so the quietest ones are left out. Pick a shorter period.', 'axle-ai-guard' ) . '</p></div>';
+		}
+
+		$total = $report['totals'];
+		echo '<p class="aag-people-total"><strong>' . esc_html__( 'Total', 'axle-ai-guard' ) . ':</strong> ' . esc_html(
+			sprintf(
+				/* translators: 1: calls, 2: blocked calls, 3: tokens, 4: cost. */
+				__( '%1$s calls, %2$s blocked, %3$s tokens, %4$s', 'axle-ai-guard' ),
+				number_format_i18n( $total['calls'] ),
+				number_format_i18n( $total['blocked'] ),
+				number_format_i18n( $total['tokens'] ),
+				implode( ' + ', UserReport::money_list( $total['costs'], $report['currency'] ) )
+			)
+		) . '</p>';
+
+		$headings = static function ( string $first ): string {
+			return '<th scope="col">' . esc_html( $first ) . '</th><th scope="col">' . esc_html__( 'Calls', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Blocked', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Tokens', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Cost', 'axle-ai-guard' ) . '</th>';
+		};
+		$cost     = static function ( array $costs ) use ( $report ): string {
+			return implode( '<br>', array_map( 'esc_html', UserReport::money_list( $costs, $report['currency'] ) ) );
+		};
+
+		echo '<section class="axle-card" aria-labelledby="aag-roles-title"><h2 class="axle-card__title" id="aag-roles-title">' . esc_html__( 'By role', 'axle-ai-guard' ) . '</h2>';
+		echo '<div class="axle-scroll" tabindex="0" role="region" aria-label="' . esc_attr__( 'Usage by role', 'axle-ai-guard' ) . '"><table class="widefat striped aag-table aag-people-roles"><thead><tr>' . $headings( __( 'Role', 'axle-ai-guard' ) ) . '<th scope="col">' . esc_html__( 'Users', 'axle-ai-guard' ) . '</th></tr></thead><tbody>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Built from escaped parts.
+		foreach ( $report['roles'] as $row ) {
+			echo '<tr data-role="' . esc_attr( $row['role'] ) . '"><th scope="row">' . esc_html( $row['label'] ) . '</th><td>' . esc_html( number_format_i18n( $row['calls'] ) ) . '</td><td>' . esc_html( number_format_i18n( $row['blocked'] ) ) . '</td><td>' . esc_html( number_format_i18n( $row['tokens'] ) ) . '</td><td>' . $cost( $row['costs'] ) . '</td><td>' . esc_html( number_format_i18n( $row['users'] ) ) . '</td></tr>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped by $cost().
+		}
+		echo '</tbody></table></div></section>';
+
+		echo '<section class="axle-card" aria-labelledby="aag-users-title"><h2 class="axle-card__title" id="aag-users-title">' . esc_html__( 'By user', 'axle-ai-guard' ) . '</h2>';
+		echo '<div class="axle-scroll" tabindex="0" role="region" aria-label="' . esc_attr__( 'Usage by user', 'axle-ai-guard' ) . '"><table class="widefat striped aag-table aag-people-users"><thead><tr>' . $headings( __( 'User', 'axle-ai-guard' ) ) . '<th scope="col">' . esc_html__( 'Role', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Last call', 'axle-ai-guard' ) . '</th></tr></thead><tbody>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Built from escaped parts.
+		foreach ( $report['users'] as $row ) {
+			$who = esc_html( $row['name'] );
+			if ( '' !== $row['login'] && $row['login'] !== $row['name'] ) {
+				$who .= ' <span class="axle-muted">(' . esc_html( $row['login'] ) . ')</span>';
+			}
+			echo '<tr data-user="' . esc_attr( (string) $row['user_id'] ) . '"><th scope="row">' . $who . '</th><td>' . esc_html( number_format_i18n( $row['calls'] ) ) . '</td><td>' . esc_html( number_format_i18n( $row['blocked'] ) ) . '</td><td>' . esc_html( number_format_i18n( $row['tokens'] ) ) . '</td><td>' . $cost( $row['costs'] ) . '</td><td>' . esc_html( UserReport::role_label( $row['role'] ) ) . '</td><td>' . self::when( (string) $row['last_call'] ) . '</td></tr>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped above and by $cost() and when().
+		}
+		echo '</tbody></table></div></section>';
+
+		echo '<section class="axle-card" aria-labelledby="aag-csv-title"><h2 class="axle-card__title" id="aag-csv-title">' . esc_html__( 'Download', 'axle-ai-guard' ) . '</h2>';
+		echo '<p class="description">' . esc_html__( 'A CSV file for a spreadsheet, for the period above. It has login names and no email addresses.', 'axle-ai-guard' ) . '</p>';
+		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="axle-actions">';
+		self::form_fields( 'people_csv' );
+		echo '<input type="hidden" name="period" value="' . esc_attr( $period ) . '">';
+		echo '<button type="submit" name="by" value="user" class="button">' . esc_html__( 'Download users as CSV', 'axle-ai-guard' ) . '</button> ';
+		echo '<button type="submit" name="by" value="role" class="button">' . esc_html__( 'Download roles as CSV', 'axle-ai-guard' ) . '</button>';
+		echo '</form></section>';
+	}
+
+	/**
 	 * Budgets tab.
 	 */
 	private function render_budgets(): void {
@@ -1752,6 +1859,33 @@ final class Page implements Service {
 				'k_subject' => $subject,
 			)
 		);
+	}
+
+	/**
+	 * Sends the users and roles report as a CSV download.
+	 */
+	public function handle_people_csv(): void {
+		self::verify( 'people_csv' );
+		$period = UserReport::period_key( sanitize_key( (string) self::posted( 'period' ) ) );
+		$by     = 'role' === sanitize_key( (string) self::posted( 'by' ) ) ? 'role' : 'user';
+		$report = $this->reports->user_usage( $period );
+		$rows   = $this->reports->user_usage_csv( $report, $by );
+
+		/**
+		 * Fires when the users and roles report is downloaded as CSV.
+		 *
+		 * @param string $by      user or role.
+		 * @param string $period  Period key.
+		 * @param int    $rows    Data rows, without the header.
+		 * @param int    $user_id The person who downloaded it.
+		 */
+		do_action( 'axle_ai_guard_user_report_exported', $by, $period, count( $rows ) - 1, get_current_user_id() );
+
+		nocache_headers();
+		header( 'Content-Type: text/csv; charset=utf-8' );
+		header( 'Content-Disposition: attachment; filename="axle-ai-guard-' . $by . 's-' . $period . '-' . gmdate( 'Y-m-d' ) . '.csv"' );
+		echo UserReport::to_csv( $rows ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- A CSV download, not HTML.
+		exit;
 	}
 
 	/**

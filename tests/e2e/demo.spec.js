@@ -31,6 +31,9 @@ test( 'demo: a user email is redacted, then a runaway plugin is switched off', a
 			// Switch the chatbot off.
 			await demo.click( page.locator( '.aag-tabs' ).getByRole( 'link', { name: 'Overview' } ), 300 );
 			await demo.click( page.locator( 'tr[data-caller="chat-assistant"]' ).getByRole( 'button', { name: 'Switch off' } ), 300 );
+			await expect( page.locator( '.axle-confirm' ) ).toBeVisible();
+			await demo.pause( 1200 );
+			await demo.click( page.locator( '.axle-confirm' ).getByRole( 'button', { name: 'Switch off' } ), 300 );
 			await expect( page.locator( 'tr[data-caller="chat-assistant"]' ) ).toContainText( 'Switched off' );
 			await demo.moveTo( page.locator( 'tr[data-caller="chat-assistant"]' ) );
 			await demo.pause( 2500 );

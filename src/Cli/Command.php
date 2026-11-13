@@ -160,6 +160,58 @@ final class Command {
 	}
 
 	/**
+	 * Shows AI usage per user or per role for a period.
+	 *
+	 * Each user counts under their first role. Cost is listed per currency, as
+	 * a plain number in that currency.
+	 *
+	 * ## OPTIONS
+	 *
+	 * [--period=<period>]
+	 * : today, 7d, 30d, month or last_month.
+	 * ---
+	 * default: month
+	 * ---
+	 *
+	 * [--by=<group>]
+	 * : user or role.
+	 * ---
+	 * default: user
+	 * ---
+	 *
+	 * [--format=<format>]
+	 * : table, csv, json, yaml or count.
+	 * ---
+	 * default: table
+	 * ---
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp axle-ai-guard user-usage --period=7d --by=role
+	 *     wp axle-ai-guard user-usage --format=csv > usage.csv
+	 *
+	 * @subcommand user-usage
+	 *
+	 * @param array $args  Positional arguments.
+	 * @param array $assoc Options.
+	 */
+	public function user_usage( $args, $assoc ): void {
+		$by     = 'role' === ( $assoc['by'] ?? '' ) ? 'role' : 'user';
+		$report = $this->reports->user_usage( (string) ( $assoc['period'] ?? 'month' ) );
+		$rows   = $this->reports->user_usage_csv( $report, $by );
+		$header = array_shift( $rows );
+		$items  = array();
+		foreach ( $rows as $row ) {
+			$items[] = array_combine( $header, $row );
+		}
+		if ( 'table' === ( $assoc['format'] ?? 'table' ) ) {
+			/* translators: 1: period name, 2: first day, 3: calls. */
+			WP_CLI::log( sprintf( __( '%1$s (from %2$s UTC): %3$d calls.', 'axle-ai-guard' ), $report['label'], substr( $report['since'], 0, 10 ), $report['totals']['calls'] ) );
+		}
+		\WP_CLI\Utils\format_items( (string) ( $assoc['format'] ?? 'table' ), $items, $header );
+	}
+
+	/**
 	 * Lists logged AI calls, newest first.
 	 *
 	 * ## OPTIONS

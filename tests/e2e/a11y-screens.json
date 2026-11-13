@@ -45,6 +45,19 @@
       "cleanup": [{ "js": "seed.js", "call": "unseed" }]
     },
     {
+      "name": "Users and roles",
+      "setup": [{ "js": "seed.js", "call": "seedPeople" }],
+      "url": "/wp-admin/tools.php?page=axle-ai-guard&tab=people",
+      "steps": [{ "waitFor": ".aag-people-users" }],
+      "cleanup": [{ "js": "seed.js", "call": "unseed" }]
+    },
+    {
+      "name": "Users and roles, nothing in the period",
+      "setup": [{ "js": "seed.js", "call": "reset" }],
+      "url": "/wp-admin/tools.php?page=axle-ai-guard&tab=people",
+      "steps": [{ "waitFor": ".axle-empty" }]
+    },
+    {
       "name": "Calls",
       "setup": [{ "js": "seed.js", "call": "seedActivity" }],
       "url": "/wp-admin/tools.php?page=axle-ai-guard&tab=calls",

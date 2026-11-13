@@ -1,6 +1,7 @@
 // Fixtures and data for the end-to-end tests, the accessibility screens, the screenshots and the demo.
 const { wp, wpEval } = require( './utils' );
 const { BASE_URL } = require( './utils/config' );
+const { appPasswordClient } = require( './utils/auth' );
 
 const OPTIONS = [
 	'axle_ai_guard_settings',
@@ -158,6 +159,47 @@ async function seedRunaway() {
 /** Back to a clean site. */
 function unseed() {
 	reset();
+	removePeople();
 }
 
-module.exports = { installFixtures, removeFixtures, reset, call, supported, direct, seedActivity, seedRunaway, seedUnpriced, killChat, unseed, OPTIONS };
+const PEOPLE = [
+	{ login: 'aag_edna', email: 'aag_edna@example.com', role: 'editor', name: 'Edna Editor', calls: 3 },
+	{ login: 'aag_alex', email: 'aag_alex@example.com', role: 'author', name: 'Alex Author', calls: 1 },
+];
+
+/** Two logged-in people who made AI calls, and one visitor call, on top of an empty log. */
+async function seedPeople() {
+	installFixtures();
+	reset();
+	const ids = {};
+	for ( const person of PEOPLE ) {
+		try {
+			ids[ person.login ] = Number( wp( 'user', 'create', person.login, person.email, `--role=${ person.role }`, `--display_name=${ person.name }`, '--user_pass=admin', '--porcelain' ) );
+		} catch ( error ) {
+			ids[ person.login ] = Number( wp( 'user', 'get', person.login, '--field=ID' ) );
+		}
+		const client = await appPasswordClient( person.login, 'AI Guard people seed' );
+		try {
+			for ( let i = 0; i < person.calls; i++ ) {
+				await client.call( 'POST', '/caller-a/v1/run', { prompt: 'Suggest three blog post titles.' } );
+			}
+		} finally {
+			await client.dispose();
+		}
+	}
+	await call( 'caller-a', 'Suggest three blog post titles.' );
+	return ids;
+}
+
+/** Deletes the people seedPeople() created. */
+function removePeople() {
+	for ( const person of PEOPLE ) {
+		try {
+			wp( 'user', 'delete', person.login, '--yes' );
+		} catch ( error ) {
+			// Not there.
+		}
+	}
+}
+
+module.exports = { installFixtures, removeFixtures, reset, call, supported, direct, seedActivity, seedPeople, removePeople, seedRunaway, seedUnpriced, killChat, unseed, OPTIONS };
