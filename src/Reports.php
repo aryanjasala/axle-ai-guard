@@ -64,6 +64,13 @@ final class Reports {
 	private Usage $usage;
 
 	/**
+	 * The guard, whose data decision the rule test shares with live calls.
+	 *
+	 * @var Guard
+	 */
+	private Guard $guard;
+
+	/**
 	 * Sets up reports.
 	 *
 	 * @param Settings   $settings  Settings.
@@ -73,8 +80,9 @@ final class Reports {
 	 * @param Prices     $prices    Prices.
 	 * @param Calls      $calls     The call log.
 	 * @param Usage      $usage     Usage counters.
+	 * @param Guard      $guard     The guard.
 	 */
-	public function __construct( Settings $settings, Policy $policy, KillSwitch $kill, Detectors $detectors, Prices $prices, Calls $calls, Usage $usage ) {
+	public function __construct( Settings $settings, Policy $policy, KillSwitch $kill, Detectors $detectors, Prices $prices, Calls $calls, Usage $usage, Guard $guard ) {
 		$this->settings  = $settings;
 		$this->policy    = $policy;
 		$this->kill      = $kill;
@@ -82,6 +90,7 @@ final class Reports {
 		$this->prices    = $prices;
 		$this->calls     = $calls;
 		$this->usage     = $usage;
+		$this->guard     = $guard;
 	}
 
 	/**
@@ -129,6 +138,22 @@ final class Reports {
 		}
 
 		return $rows;
+	}
+
+	/**
+	 * Models called in the last 30 days that have no price, so their calls show a cost of zero.
+	 *
+	 * @return array<int, array{provider: string, model: string, calls: int, tokens: int}>
+	 */
+	public function unpriced_models(): array {
+		$list = array();
+		foreach ( $this->calls->unpriced( gmdate( 'Y-m-d H:i:s', time() - 30 * DAY_IN_SECONDS ) ) as $row ) {
+			if ( null === $this->prices->price( $row['provider'], $row['model'] ) ) {
+				$list[] = $row;
+			}
+		}
+
+		return $list;
 	}
 
 	/**
@@ -225,18 +250,54 @@ final class Reports {
 	}
 
 	/**
-	 * Runs the data rules on a text, with no AI call.
+	 * Runs the data rules on a text, with no AI call and nothing stored.
 	 *
-	 * @param string $text   Text.
-	 * @param string $caller Caller key the modes are for.
-	 * @return array{findings: array<int, array{id: string, label: string, count: int, mode: string}>, redacted: string, blocked: bool}
+	 * @param string $text    Text.
+	 * @param string $caller  Caller key the modes are for.
+	 * @param string $context Request context the rules are checked in, such as front. Empty: admin.
+	 * @return array{findings: array<int, array{id: string, label: string, count: int, mode: string}>, redacted: string, blocked: bool, outcome: string, rule: string, spans: array, caller: string, context: string, too_large: bool}
 	 */
-	public function test_rules( string $text, string $caller = '' ): array {
+	public function test_rules( string $text, string $caller = '', string $context = '' ): array {
+		$caller  = '' !== $caller ? $caller : 'unknown';
+		$context = in_array( $context, Settings::CONTEXTS, true ) ? $context : 'admin';
+		$user    = wp_get_current_user();
+		$call    = array(
+			'path'       => 'client',
+			'caller'     => array(
+				'type' => 'plugin',
+				'slug' => $caller,
+				'file' => '',
+				'line' => 0,
+			),
+			'context'    => $context,
+			'user_id'    => (int) $user->ID,
+			'roles'      => $user->ID ? array_values( (array) $user->roles ) : array( 'anonymous' ),
+			'ip'         => '',
+			'provider'   => '',
+			'model'      => '',
+			'capability' => '',
+			'test'       => true,
+		);
+
+		$profile = $this->guard->profile(
+			array(
+				array(
+					'role'  => 'user',
+					'texts' => array( $text ),
+					'files' => array(),
+				),
+			),
+			array(
+				'system'     => '',
+				'max_tokens' => 0,
+			),
+			$call
+		);
+		$check   = $this->guard->data_check( $call, $profile );
+
 		$findings = $this->detectors->scan( $text, $caller );
 		$list     = array();
 		$redact   = array();
-		$blocked  = false;
-
 		foreach ( $findings as $id => $finding ) {
 			$list[] = array(
 				'id'    => $id,
@@ -244,16 +305,24 @@ final class Reports {
 				'count' => $finding['count'],
 				'mode'  => $finding['mode'],
 			);
-			if ( 'redact' === $finding['mode'] ) {
+			if ( 'redact' === $finding['mode'] || ( 'block' === $finding['mode'] && isset( $check['profile']['not_blocked'] ) ) ) {
 				$redact[] = $id;
 			}
-			$blocked = $blocked || 'block' === $finding['mode'];
 		}
 
+		$blocked = null !== $check['block'];
+		$rule    = $blocked ? (string) $check['block']['rule'] : ( $redact ? 'data:' . $redact[0] : '' );
+
 		return array(
-			'findings' => $list,
-			'redacted' => $this->detectors->redact( $text, $redact )[0],
-			'blocked'  => $blocked,
+			'findings'  => $list,
+			'redacted'  => $this->detectors->redact( $text, $redact )[0],
+			'blocked'   => $blocked,
+			'outcome'   => $blocked ? 'blocked' : ( $redact ? 'redacted' : 'sent' ),
+			'rule'      => $rule,
+			'spans'     => $this->detectors->locate( $text, $caller ),
+			'caller'    => $caller,
+			'context'   => $context,
+			'too_large' => (bool) $profile['too_large'],
 		);
 	}
 }

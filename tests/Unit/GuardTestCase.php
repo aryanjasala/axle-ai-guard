@@ -14,7 +14,9 @@ use AryanX\Axle\AiGuard\Guard;
 use AryanX\Axle\AiGuard\KillSwitch;
 use AryanX\Axle\AiGuard\Policy;
 use AryanX\Axle\AiGuard\Prices;
+use AryanX\Axle\AiGuard\Forecast;
 use AryanX\Axle\AiGuard\Reports;
+use AryanX\Axle\AiGuard\Runaway;
 use AryanX\Axle\AiGuard\Settings;
 use AryanX\Axle\AiGuard\Usage;
 use Brain\Monkey\Functions;
@@ -49,6 +51,10 @@ abstract class GuardTestCase extends TestCase {
 	protected $guard;
 	/** @var Reports */
 	protected $reports;
+	/** @var Runaway */
+	protected $runaway;
+	/** @var Forecast */
+	protected $forecast;
 	/** @var array Mails sent. */
 	protected $mails = array();
 	/** @var array Webhook posts. */
@@ -157,7 +163,9 @@ abstract class GuardTestCase extends TestCase {
 		$this->prices    = new Prices( $this->settings );
 		$this->calls     = new Calls();
 		$this->guard     = new Guard( $this->settings, $this->policy, $this->kill, $this->detectors, $this->prices, $this->calls, $this->alerts );
-		$this->reports   = new Reports( $this->settings, $this->policy, $this->kill, $this->detectors, $this->prices, $this->calls, $this->usage );
+		$this->runaway   = new Runaway( $this->settings, $this->kill, $this->usage, $this->alerts );
+		$this->forecast  = new Forecast( $this->settings, $this->policy, $this->usage, $this->alerts, $this->runaway );
+		$this->reports   = new Reports( $this->settings, $this->policy, $this->kill, $this->detectors, $this->prices, $this->calls, $this->usage, $this->guard );
 	}
 
 	protected function tearDown(): void {

@@ -17,6 +17,18 @@ Direct SDK use (`WordPress\AiClient\AiClient::prompt()`) skips step 2; step 3 th
 
 **Failing open.** If the guard's tables are missing or a check throws, the call goes through and a notice says the guard is degraded. `axle_ai_guard_fail_closed` blocks instead.
 
+## Runaway protection and forecast
+
+Every finished call adds one to the caller's bucket for the current hour (one upsert, no extra read). Every 10th call, and when the caller reaches its floor, the hour is compared with the caller's baseline: the average of its active hours in the last 7 days, not counting this one. A caller is a **runaway** when its calls reach the larger of the floor (100 calls, or what "Resume and raise the limit" set) and 10 times its baseline, or when its spend reaches the larger of 5 currency units and 10 times its baseline spend. A new or quiet caller has no baseline, so only the floor applies.
+
+Modes: **Off**, **Alert only** (the default for installs that existed before this feature) and **Pause** (the default for new installs). Pause switches only that caller off, through its kill switch. Alert and a notice on every admin screen follow in both modes, with **Resume**, **Resume and raise the limit** (the floor becomes twice what ran away) or **Dismiss**. WordPress itself (`core`) and callers on the `axle_ai_guard_runaway_exempt` list are never flagged. Turning the caller's switch on by hand also closes its event.
+
+The **forecast** takes the average daily use of the last 7 days and says when each monthly budget (site and plugins that have one) runs out. A daily job alerts once per month and budget when that day falls before the month ends. Hour counters are kept for 8 days.
+
+## Try your rules
+
+On Data rules, paste text, pick a plugin and a context, and see the text with every match marked and labelled with its detector and mode, the outcome (sent as it is, sent redacted, blocked) and the rule that decided. It runs the live detection path (`Guard::data_check()`, so `axle_ai_guard_policy` applies too). The text is posted to the page and answered in the same request: it is not stored and not sent anywhere.
+
 ## Callers
 
 Core passes no caller, so the plugin walks the backtrace and takes the first frame outside WordPress core and outside this plugin. The caller key is the plugin folder (`chatbot`), `mu:<name>` for a must-use plugin, `theme:<slug>`, `core` or `unknown`. A shared library inside one plugin, used by another, shows up as the first one. The file and line it used are stored and shown in the call details. `axle_ai_guard_caller` overrides it.
@@ -85,6 +97,16 @@ Redaction rewrites the JSON body for three formats: OpenAI (`messages[].content`
 | `axle_ai_guard_count_support_checks` | `( bool $count, array $call )` | `true` makes `is_supported_*` calls face every rule |
 | `axle_ai_guard_max_scan_bytes` | `( int $bytes, array $call )` | Most prompt text the data rules scan. Default 200 KB |
 | `axle_ai_guard_fail_closed` | `( bool $closed, Throwable $error )` | Block calls while the guard itself is failing |
+| `axle_ai_guard_runaway_mode` | `( string $mode )` | off, alert or pause. Default from the settings |
+| `axle_ai_guard_runaway_multiple` | `( int $multiple, string $caller )` | Times the baseline that counts as a runaway. Default 10 |
+| `axle_ai_guard_runaway_min_calls` | `( int $calls, string $caller )` | Fewest calls an hour that can count. Default 100 |
+| `axle_ai_guard_runaway_min_cost` | `( int $micros, string $caller )` | Least spend an hour that can count. Default 5 units |
+| `axle_ai_guard_runaway_exempt` | `( string[] $callers )` | Callers never paused or flagged. `core` is always on it |
+| `axle_ai_guard_runaway_check_every` | `( int $calls )` | Check a caller every this many calls in an hour. Default 10 |
+| `axle_ai_guard_forecast_days` | `( int $days )` | Days of use the forecast takes its pace from. Default 7 |
+| `axle_ai_guard_forecast` | `( array $forecast, string $subject )` | The forecast of a budget |
+| `axle_ai_guard_prices_import_max` | `( int $max )` | Most models per import. Default 500 |
+| `axle_ai_guard_recalc_seconds` | `( int $seconds )` | Seconds one recalculation request may run. Default 15 |
 
 ### Actions
 
@@ -103,6 +125,11 @@ Redaction rewrites the JSON body for three formats: OpenAI (`messages[].content`
 | `axle_ai_guard_new_caller_seen` | `( array $caller, string $mode )` | A caller made its first call |
 | `axle_ai_guard_alert_sent` | `( string $type, string $subject, string $message, string[] $channels )` | An alert went out |
 | `axle_ai_guard_logs_pruned` | `( array $counts )` | Old rows were deleted |
+| `axle_ai_guard_runaway_detected` | `( array $event )` | A caller was flagged. `$event` has id, caller, at, mode, paused, calls, cost, base_calls, base_cost, multiple, by |
+| `axle_ai_guard_runaway_resumed` | `( array $event, bool $raised, int $user_id )` | Someone resumed a flagged caller |
+| `axle_ai_guard_forecast_crossed` | `( string $subject, array $forecast )` | A forecast shows a monthly budget running out early. Once a month per budget |
+| `axle_ai_guard_prices_saved` | `( array $table )` | The price table was saved or imported |
+| `axle_ai_guard_costs_recalculated` | `( array $summary, int $days )` | Costs were recalculated |
 
 `$call` has `path` (client, embedding, direct), `caller`, `context`, `user_id`, `roles`, `ip`, `provider`, `model` and `capability`.
 
@@ -163,13 +190,14 @@ Category `axle-ai-guard`, all behind `axle_ai_guard_manage`, all listed for the 
 | `axle-ai-guard/list-calls` | readonly | `status`, `plugin`, `provider`, `model`, `context`, `since`, `limit`, `include_preview` | Calls with their data profile; previews only when asked and stored |
 | `axle-ai-guard/get-limits` | readonly | none | Budgets with usage, rate limits, data rule modes, kill switches that are on |
 | `axle-ai-guard/engage-kill-switch` | idempotent | `scope` (global, plugin, provider, context), `subject`, `reason` | `{ scope, subject, changed, on }` |
-| `axle-ai-guard/test-data-rules` | readonly | `text`, `plugin` | Findings, the redacted text, whether it would be blocked |
+| `axle-ai-guard/test-data-rules` | readonly | `text`, `plugin`, `context` | Findings, the redacted text, whether it would be blocked, the outcome, the deciding rule and where each match is |
+| `axle-ai-guard/get-runaway-status` | readonly | none | Mode, each caller's hour against its baseline and limit, open events, month-end forecasts |
 
-There is no ability to turn a switch off, raise a budget or loosen a rule. Axle Read-Only Mode still allows the readonly ones during a freeze.
+An agent can pause a runaway caller with the kill switch ability and read its status; only a person resumes it. There is no ability to turn a switch off, raise a budget or loosen a rule. Axle Read-Only Mode still allows the readonly ones during a freeze.
 
 ## REST API
 
-Routes under `axle-ai-guard/v1`, for the screens, behind the same capability: `GET /calls` (`status`, `plugin`, `provider`, `page`), `GET /calls/<id>` (with the preview and stored prompt), `POST /kill` (`scope`, `subject`, `on`, `reason`), `POST /rules/test` (`text`).
+Routes under `axle-ai-guard/v1`, for the screens, behind the same capability: `GET /calls` (`status`, `plugin`, `provider`, `page`), `GET /calls/<id>` (with the preview and stored prompt), `POST /kill` (`scope`, `subject`, `on`, `reason`), `POST /rules/test` (`text`, `plugin`, `context`), `GET /runaway` and `GET /prices` (the export file).
 
 ## WP-CLI
 
@@ -185,11 +213,16 @@ wp axle-ai-guard budget set <global|plugin:caller> [--daily-tokens=<n>] [--month
 wp axle-ai-guard limit set <global|plugin:caller|plugins|users|ips> --per-minute=<n>
 wp axle-ai-guard rules list [--format=<format>]
 wp axle-ai-guard rules set <detector> <off|log|redact|block>
-wp axle-ai-guard rules test <text|->
+wp axle-ai-guard rules test <text|-> [--plugin=<caller>] [--context=<context>]
+wp axle-ai-guard runaway [status|resume <caller>|dismiss <caller>] [--raise-limit] [--format=<format>]
 wp axle-ai-guard prices list [--format=<format>]
 wp axle-ai-guard prices set <provider/model> --input=<price> --output=<price> [--thought=<price>]
 wp axle-ai-guard prices reset
-wp axle-ai-guard prices recalc [--days=30]
+wp axle-ai-guard prices undo
+wp axle-ai-guard prices export
+wp axle-ai-guard prices import <file|->
+wp axle-ai-guard prices missing [--format=<format>]
+wp axle-ai-guard prices recalc [--days=30] [--dry-run]
 wp axle-ai-guard callers [--format=<format>]
 wp axle-ai-guard approve <caller>
 wp axle-ai-guard deny <caller>
@@ -204,13 +237,16 @@ With no `--plugin`, `--provider` or `--context`, `kill` and `resume` work the sw
 | Stored | What |
 | --- | --- |
 | `{prefix}axle_ai_guard_calls` | One row per call: time, duration, status, block rule, path, caller and file, user, context, anonymised visitor IP, provider, model, capability, tokens, estimated flag, cost and currency, request and response bytes, HTTP status, error code, data profile (JSON), preview |
-| `{prefix}axle_ai_guard_usage` | Counters per period (`d:2026-10-30`, `m:2026-10`, `n:<minute>` for rate limits) and subject (`global`, `plugin:<caller>`, `provider:<id>`, `user:<id>`, `ip:<address>`): calls, tokens, cost, blocked |
+| `{prefix}axle_ai_guard_usage` | Counters per period (`d:2026-10-30`, `m:2026-10`, `h:<hour>` for runaway protection, `n:<minute>` for rate limits) and subject (`global`, `plugin:<caller>`, `provider:<id>`, `user:<id>`, `ip:<address>`): calls, tokens, cost, blocked |
 | `{prefix}axle_ai_guard_prompts` | Redacted prompts, only when the prompt store is on, with an expiry |
 | `axle_ai_guard_settings` | Settings |
 | `axle_ai_guard_policies` | Budgets, rate limits, contexts, providers, models, roles and file blocking per subject |
 | `axle_ai_guard_rules` | Data rule modes and custom rules |
 | `axle_ai_guard_prices` | The edited price table and its date |
 | `axle_ai_guard_kill` | Switches that are on, with who, when and why |
+| `axle_ai_guard_runaway` | Runaway events, raised limits and forecast alerts already sent |
+| `axle_ai_guard_prices_undo` | The price table before the last change, for Undo |
+| `h:<YmdH>` periods in the usage table | Calls and cost per caller per hour, kept 8 days |
 | `axle_ai_guard_seen_callers` | Callers and their approval status |
 | `axle_ai_guard_db_version` | Schema version |
 | `axle_ai_guard_network_kill` (network option) | The network switch |
@@ -221,7 +257,7 @@ Uninstalling removes the tables, options, transients, cron event and capability 
 
 ## Privacy
 
-User IDs and anonymised visitor IP addresses are personal data, as are previews and stored prompts when they are on (redacted). **Tools > Export Personal Data** lists a user's calls; **Tools > Erase Personal Data** removes the user, IP address, preview and stored prompt and keeps the record that a call happened, so totals stay right. Settings > Privacy gets suggested text. The only outgoing request the plugin makes is the optional alert webhook.
+User IDs and anonymised visitor IP addresses are personal data, as are previews and stored prompts when they are on (redacted). **Tools > Export Personal Data** lists a user's calls; **Tools > Erase Personal Data** removes the user, IP address, preview and stored prompt and keeps the record that a call happened, so totals stay right. The Get started card is hidden per user with a user meta value, removed on uninstall. Settings > Privacy gets suggested text. The only outgoing request the plugin makes is the optional alert webhook.
 
 ## Limits
 
@@ -232,3 +268,4 @@ User IDs and anonymised visitor IP addresses are personal data, as are previews 
 - Streaming is not covered (the AI Client does not stream in 7.1).
 - On multisite, budgets are per site; the network has a kill switch and a summary, not a shared budget.
 - Prices are a local table, not a live feed.
+- Runaway protection is per site. It checks every 10th call, so a runaway is caught within 10 calls of the threshold.

@@ -9,16 +9,19 @@ namespace AryanX\Axle\AiGuard\Health;
 
 use AryanX\Axle\AiGuard\Admin\Page;
 use AryanX\Axle\AiGuard\Calls;
+use AryanX\Axle\AiGuard\Forecast;
 use AryanX\Axle\AiGuard\Policy;
+use AryanX\Axle\AiGuard\Runaway;
 use AryanX\Axle\AiGuard\Service;
 use AryanX\Axle\AiGuard\Settings;
 
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Five checks: AI calls without any budget, providers with their own
+ * Seven checks: AI calls without any budget, providers with their own
  * transport (no redaction), many unknown callers, double logging with the AI
- * plugin, and connector keys stored in the database.
+ * plugin, connector keys stored in the database, a runaway caller, and a
+ * budget that runs out before the month does.
  */
 final class SiteHealth implements Service {
 
@@ -44,16 +47,34 @@ final class SiteHealth implements Service {
 	private Policy $policy;
 
 	/**
+	 * Runaway guard.
+	 *
+	 * @var Runaway
+	 */
+	private Runaway $runaway;
+
+	/**
+	 * Forecast.
+	 *
+	 * @var Forecast
+	 */
+	private Forecast $forecast;
+
+	/**
 	 * Sets up the tests.
 	 *
 	 * @param Settings $settings Settings.
 	 * @param Calls    $calls    The call log.
 	 * @param Policy   $policy   Policy.
+	 * @param Runaway  $runaway  Runaway guard.
+	 * @param Forecast $forecast Forecast.
 	 */
-	public function __construct( Settings $settings, Calls $calls, Policy $policy ) {
+	public function __construct( Settings $settings, Calls $calls, Policy $policy, Runaway $runaway, Forecast $forecast ) {
 		$this->settings = $settings;
 		$this->calls    = $calls;
 		$this->policy   = $policy;
+		$this->runaway  = $runaway;
+		$this->forecast = $forecast;
 	}
 
 	/**
@@ -71,7 +92,7 @@ final class SiteHealth implements Service {
 	 */
 	public function tests( $tests ): array {
 		$tests = (array) $tests;
-		foreach ( array( 'budget', 'transport', 'unknown', 'double_log', 'keys' ) as $test ) {
+		foreach ( array( 'budget', 'transport', 'unknown', 'double_log', 'keys', 'runaway', 'forecast' ) as $test ) {
 			$tests['direct'][ 'axle_ai_guard_' . $test ] = array(
 				'label' => __( 'Axle AI Guard', 'axle-ai-guard' ),
 				'test'  => array( $this, 'test_' . $test ),
@@ -211,6 +232,57 @@ final class SiteHealth implements Service {
 				? __( 'Connector keys come from environment variables or constants, or none are set.', 'axle-ai-guard' )
 				/* translators: %s: connector ids. */
 				: sprintf( __( 'The keys of these connectors are stored as plain text options: %s. Anyone with a database copy can use them. Move them to an environment variable or a constant in wp-config.php.', 'axle-ai-guard' ), implode( ', ', $stored ) )
+		);
+	}
+
+	/**
+	 * A caller was flagged as a runaway and nobody dealt with it, or the guard is off.
+	 *
+	 * @return array
+	 */
+	public function test_runaway(): array {
+		$open = $this->runaway->open_events();
+		$off  = 'off' === $this->runaway->mode();
+		$good = ! $open && ! $off;
+
+		if ( $open ) {
+			$names = implode( ', ', array_unique( array_map( 'strval', array_column( $open, 'caller' ) ) ) );
+			$label = __( 'A plugin made far more AI calls than usual', 'axle-ai-guard' );
+			/* translators: %s: caller keys. */
+			$description = sprintf( __( 'These plugins went past their normal number of AI calls: %s. Open AI Guard to resume them, raise the limit, or dismiss the warning.', 'axle-ai-guard' ), $names );
+		} elseif ( $off ) {
+			$label       = __( 'Runaway protection is off', 'axle-ai-guard' );
+			$description = __( 'Nothing watches for a plugin that suddenly calls AI in a loop. Turn it on in the AI Guard settings.', 'axle-ai-guard' );
+		} else {
+			$label       = __( 'No plugin is running away', 'axle-ai-guard' );
+			$description = __( 'Every plugin makes about as many AI calls as it normally does.', 'axle-ai-guard' );
+		}
+
+		return self::result( 'runaway', $good, $label, $description );
+	}
+
+	/**
+	 * A monthly budget runs out before the month ends at the current pace.
+	 *
+	 * @return array
+	 */
+	public function test_forecast(): array {
+		$crossing = array();
+		foreach ( $this->forecast->all() as $forecast ) {
+			if ( $forecast['crosses'] || 'reached' === $forecast['state'] ) {
+				$crossing[] = (string) $forecast['subject'];
+			}
+		}
+		$good = ! $crossing;
+
+		return self::result(
+			'forecast',
+			$good,
+			$good ? __( 'Monthly AI budgets last until month end', 'axle-ai-guard' ) : __( 'A monthly AI budget runs out early', 'axle-ai-guard' ),
+			$good
+				? __( 'At the pace of the last seven days, no monthly budget is used up before the month ends.', 'axle-ai-guard' )
+				/* translators: %s: budget subjects. */
+				: sprintf( __( 'At the pace of the last seven days, the monthly budget of %s is used up before the month ends, and AI calls stop until the next one.', 'axle-ai-guard' ), implode( ', ', $crossing ) )
 		);
 	}
 }

@@ -313,10 +313,11 @@ final class KillSwitch implements Service {
 			return;
 		}
 
+		// Core's own admin bar classes and colours: a warning icon and words, no colour of ours.
 		$bar->add_node(
 			array(
 				'id'    => 'axle-ai-guard',
-				'title' => $this->global_on() ? esc_html__( 'AI is off', 'axle-ai-guard' ) : esc_html__( 'AI partly off', 'axle-ai-guard' ),
+				'title' => '<span class="ab-icon dashicons-before dashicons-warning" aria-hidden="true"></span><span class="ab-label">' . ( $this->global_on() ? esc_html__( 'AI is off', 'axle-ai-guard' ) : esc_html__( 'AI partly off', 'axle-ai-guard' ) ) . '</span>',
 				'href'  => admin_url( 'tools.php?page=axle-ai-guard' ),
 				'meta'  => array( 'class' => 'aag-adminbar' ),
 			)

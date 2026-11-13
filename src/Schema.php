@@ -15,7 +15,7 @@ defined( 'ABSPATH' ) || exit;
  */
 final class Schema {
 
-	public const DB_VERSION = '1';
+	public const DB_VERSION = '2';
 	public const OPTION     = 'axle_ai_guard_db_version';
 	public const CAPABILITY = 'axle_ai_guard_manage';
 	public const CRON       = 'axle_ai_guard_cleanup';
@@ -149,6 +149,11 @@ final class Schema {
 
 		if ( ! wp_next_scheduled( self::CRON ) ) {
 			wp_schedule_event( time() + HOUR_IN_SECONDS, 'daily', self::CRON );
+		}
+
+		// A new install pauses a runaway caller; an install that already has settings keeps alert only.
+		if ( false === get_option( self::OPTION ) && false === get_option( Settings::OPTION ) ) {
+			update_option( Settings::OPTION, Settings::sanitize( array( 'runaway_mode' => 'pause' ) ), false );
 		}
 
 		update_option( self::OPTION, self::DB_VERSION );

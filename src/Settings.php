@@ -23,6 +23,8 @@ final class Settings {
 
 	public const NEW_CALLER_MODES = array( 'allow', 'alert', 'deny' );
 
+	public const RUNAWAY_MODES = array( 'off', 'alert', 'pause' );
+
 	/**
 	 * Default settings.
 	 *
@@ -48,6 +50,9 @@ final class Settings {
 			'direct_monitoring' => false,
 			'autotrip_budget'   => false,
 			'autotrip_errors'   => 0,
+			'runaway_mode'      => 'alert',
+			'runaway_multiple'  => 10,
+			'runaway_min_calls' => 100,
 		);
 	}
 
@@ -112,6 +117,11 @@ final class Settings {
 		if ( ! in_array( $clean['new_caller'], self::NEW_CALLER_MODES, true ) ) {
 			$clean['new_caller'] = $defaults['new_caller'];
 		}
+		if ( ! in_array( $clean['runaway_mode'], self::RUNAWAY_MODES, true ) ) {
+			$clean['runaway_mode'] = $defaults['runaway_mode'];
+		}
+		$clean['runaway_multiple']  = max( 2, min( 1000, $clean['runaway_multiple'] ) );
+		$clean['runaway_min_calls'] = max( 5, min( 1000000, $clean['runaway_min_calls'] ) );
 		$clean['currency']          = preg_match( '/^[A-Z]{3}$/', strtoupper( $clean['currency'] ) ) ? strtoupper( $clean['currency'] ) : 'USD';
 		$clean['soft_ratio']        = min( 100, max( 1, $clean['soft_ratio'] ) );
 		$clean['retention_calls']   = max( 1, min( 3650, $clean['retention_calls'] ) );

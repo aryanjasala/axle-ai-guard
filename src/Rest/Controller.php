@@ -10,8 +10,11 @@ namespace AryanX\Axle\AiGuard\Rest;
 use AryanX\Axle\AiGuard\Calls;
 use AryanX\Axle\AiGuard\KillSwitch;
 use AryanX\Axle\AiGuard\Plugin;
+use AryanX\Axle\AiGuard\Prices;
 use AryanX\Axle\AiGuard\Reports;
+use AryanX\Axle\AiGuard\Runaway;
 use AryanX\Axle\AiGuard\Service;
+use AryanX\Axle\AiGuard\Settings;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -44,16 +47,34 @@ final class Controller implements Service {
 	private Calls $calls;
 
 	/**
+	 * Runaway guard.
+	 *
+	 * @var Runaway
+	 */
+	private Runaway $runaway;
+
+	/**
+	 * Prices.
+	 *
+	 * @var Prices
+	 */
+	private Prices $prices;
+
+	/**
 	 * Sets up the routes.
 	 *
 	 * @param Reports    $reports Reports.
 	 * @param KillSwitch $kill    Kill switches.
 	 * @param Calls      $calls   The call log.
+	 * @param Runaway    $runaway Runaway guard.
+	 * @param Prices     $prices  Prices.
 	 */
-	public function __construct( Reports $reports, KillSwitch $kill, Calls $calls ) {
+	public function __construct( Reports $reports, KillSwitch $kill, Calls $calls, Runaway $runaway, Prices $prices ) {
 		$this->reports = $reports;
 		$this->kill    = $kill;
 		$this->calls   = $calls;
+		$this->runaway = $runaway;
+		$this->prices  = $prices;
 	}
 
 	/**
@@ -146,13 +167,66 @@ final class Controller implements Service {
 				'callback'            => array( $this, 'test_rules' ),
 				'permission_callback' => array( $this, 'can' ),
 				'args'                => array(
-					'text' => array(
+					'text'    => array(
 						'type'     => 'string',
 						'required' => true,
+					),
+					'plugin'  => array(
+						'type'    => 'string',
+						'default' => '',
+					),
+					'context' => array(
+						'type'    => 'string',
+						'enum'    => array_merge( array( '' ), Settings::CONTEXTS ),
+						'default' => '',
 					),
 				),
 			)
 		);
+
+		register_rest_route(
+			self::NAMESPACE,
+			'/runaway',
+			array(
+				'methods'             => 'GET',
+				'callback'            => array( $this, 'get_runaway' ),
+				'permission_callback' => array( $this, 'can' ),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
+			'/prices',
+			array(
+				'methods'             => 'GET',
+				'callback'            => array( $this, 'get_prices' ),
+				'permission_callback' => array( $this, 'can' ),
+			)
+		);
+	}
+
+	/**
+	 * GET /runaway: the mode, each caller's hour against its baseline, and open events.
+	 *
+	 * @return \WP_REST_Response
+	 */
+	public function get_runaway() {
+		return rest_ensure_response(
+			array(
+				'mode'    => $this->runaway->mode(),
+				'callers' => $this->runaway->callers(),
+				'events'  => $this->runaway->open_events(),
+			)
+		);
+	}
+
+	/**
+	 * GET /prices: the price table in use, as the export file has it.
+	 *
+	 * @return \WP_REST_Response
+	 */
+	public function get_prices() {
+		return rest_ensure_response( json_decode( $this->prices->export_json(), true ) );
 	}
 
 	/**
@@ -238,6 +312,6 @@ final class Controller implements Service {
 	 * @return \WP_REST_Response
 	 */
 	public function test_rules( $request ) {
-		return rest_ensure_response( $this->reports->test_rules( (string) $request->get_param( 'text' ) ) );
+		return rest_ensure_response( $this->reports->test_rules( (string) $request->get_param( 'text' ), (string) $request->get_param( 'plugin' ), (string) $request->get_param( 'context' ) ) );
 	}
 }

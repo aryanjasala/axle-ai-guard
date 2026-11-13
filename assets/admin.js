@@ -81,7 +81,70 @@
 		region.textContent = message;
 	}
 
+	function speak( message ) {
+		if ( window.wp && window.wp.a11y && window.wp.a11y.speak ) {
+			window.wp.a11y.speak( message );
+		}
+	}
+
+	let confirmCount = 0;
+
+	/** Shows the in-place confirm step after a form, and moves focus into it. */
+	function openConfirm( form, submitter ) {
+		const old = form.parentNode.querySelector( '[data-aag-confirm-box]' );
+		if ( old ) {
+			old.remove();
+		}
+		confirmCount++;
+		const id = 'aag-confirm-' + confirmCount;
+		const box = el( 'div', { class: 'axle-confirm axle-confirm--danger', role: 'group', 'aria-labelledby': id, tabindex: '-1', 'data-aag-confirm-box': '1' }, [
+			el( 'p', {}, [ el( 'strong', { id, text: form.dataset.confirmTitle || __( 'Are you sure?', 'axle-ai-guard' ) } ) ] ),
+			el( 'p', { text: form.dataset.confirmBody || '' } ),
+			el( 'p', { class: 'axle-actions' }, [
+				el( 'button', { type: 'button', class: 'button axle-button--danger', 'data-aag-yes': '1', text: form.dataset.confirmYes || __( 'Continue', 'axle-ai-guard' ) } ),
+				el( 'button', { type: 'button', class: 'button', 'data-aag-no': '1', text: __( 'Cancel', 'axle-ai-guard' ) } ),
+			] ),
+		] );
+		const close = () => {
+			box.remove();
+			if ( submitter ) {
+				submitter.focus();
+			}
+		};
+		box.querySelector( '[data-aag-no]' ).addEventListener( 'click', close );
+		box.querySelector( '[data-aag-yes]' ).addEventListener( 'click', () => {
+			form.dataset.aagConfirmed = '1';
+			box.remove();
+			if ( form.requestSubmit ) {
+				form.requestSubmit( submitter || undefined );
+			} else {
+				form.submit();
+			}
+		} );
+		box.addEventListener( 'keydown', ( e ) => {
+			if ( 'Escape' === e.key ) {
+				close();
+			}
+		} );
+		form.insertAdjacentElement( 'afterend', box );
+		box.focus();
+		speak( box.textContent );
+	}
+
 	document.addEventListener( 'submit', ( event ) => {
+		const confirmForm = event.target.closest( '[data-aag-confirm]' );
+		if ( confirmForm && ! confirmForm.dataset.aagConfirmed ) {
+			const needsTrigger = 'deny' === confirmForm.dataset.aagConfirm;
+			if ( ! needsTrigger || ( event.submitter && event.submitter.hasAttribute( 'data-aag-confirm-trigger' ) ) ) {
+				event.preventDefault();
+				openConfirm( confirmForm, event.submitter );
+				return;
+			}
+		}
+		if ( confirmForm ) {
+			delete confirmForm.dataset.aagConfirmed;
+		}
+
 		const form = event.target.closest( '.aag-kill-form' );
 		const button = form && form.querySelector( '.aag-kill-toggle' );
 		if ( ! button || ! window.wp || ! window.wp.apiFetch ) {
@@ -89,6 +152,9 @@
 		}
 		event.preventDefault();
 		button.disabled = true;
+		button.setAttribute( 'aria-busy', 'true' );
+		const spinner = el( 'span', { class: 'spinner is-active aag-spinner' } );
+		button.after( spinner );
 
 		window.wp
 			.apiFetch( {
@@ -99,12 +165,22 @@
 			.then( ( result ) => {
 				action( 'axleAiGuard.killSwitchToggled', result );
 				announce( result.on ? __( 'Switched off.', 'axle-ai-guard' ) : __( 'Switched back on.', 'axle-ai-guard' ) );
-				// The status, the notice and the admin bar all change: load the screen again.
-				window.location.reload();
+				speak( result.on ? __( 'Switched off.', 'axle-ai-guard' ) : __( 'Switched back on.', 'axle-ai-guard' ) );
+				// The status, the notice and the admin bar all change: load the screen again, with the notice and its Undo link.
+				const url = new URL( data.screen || window.location.href, window.location.href );
+				url.searchParams.set( 'done', result.on ? 'kill_on' : 'kill_off' );
+				url.searchParams.set( 'k_scope', button.dataset.scope );
+				url.searchParams.set( 'k_subject', button.dataset.subject );
+				window.location.assign( url.toString() );
 			} )
 			.catch( ( error ) => {
 				button.disabled = false;
-				announce( ( error && error.message ) || __( 'That did not work.', 'axle-ai-guard' ) );
+				button.removeAttribute( 'aria-busy' );
+				spinner.remove();
+				const message = ( ( error && error.message ) || __( 'That did not work.', 'axle-ai-guard' ) ) + ' ' + __( 'Reload the page and try again.', 'axle-ai-guard' );
+				announce( message );
+				speak( message );
+				form.after( el( 'span', { class: 'notice notice-error inline aag-error', role: 'alert', text: message } ) );
 			} );
 	} );
 
@@ -114,9 +190,19 @@
 		return tones[ status ] || 'neutral';
 	}
 
+	/** Parses the escaped <time> markup AxleUi::relative_time() printed on the server. */
+	function trusted( html ) {
+		if ( ! html ) {
+			return null;
+		}
+		const template = document.createElement( 'template' );
+		template.innerHTML = html;
+		return template.content;
+	}
+
 	function defaultColumns() {
 		return [
-			{ key: 'started_at', label: __( 'When', 'axle-ai-guard' ), render: ( call ) => new Date( call.started_at ).toLocaleString() },
+			{ key: 'started_at', label: __( 'When', 'axle-ai-guard' ), render: ( call ) => trusted( call.when ) || call.started_at },
 			{ key: 'caller', label: __( 'Caller', 'axle-ai-guard' ), render: ( call ) => el( 'code', { text: call.caller } ) },
 			{ key: 'status', label: __( 'Status', 'axle-ai-guard' ), render: ( call ) => el( 'span', { class: 'axle-badge axle-badge--' + statusTone( call.status ) + ' aag-pill aag-pill-' + call.status, text: call.status + ( call.block_rule ? ': ' + call.block_rule : '' ) } ) },
 			{ key: 'model', label: __( 'Provider and model', 'axle-ai-guard' ), render: ( call ) => [ call.provider, call.model ].filter( Boolean ).join( ' / ' ) || '-' },
@@ -144,10 +230,12 @@
 		if ( ! data.calls.length ) {
 			holder.textContent = '';
 			holder.classList.remove( 'axle-card' );
+			holder.removeAttribute( 'aria-busy' );
 			holder.append( el( 'div', { class: 'axle-empty aag-empty' }, [ el( 'p', { text: __( 'No calls match these filters. Clear a filter, or wait for a plugin to make an AI call.', 'axle-ai-guard' ) } ) ] ) );
 			return;
 		}
 		const table = el( 'table', { class: 'widefat striped aag-table aag-calls-table' } );
+		const scroll = el( 'div', { class: 'axle-scroll', tabindex: '0', role: 'region', 'aria-label': __( 'Calls', 'axle-ai-guard' ) } );
 		const head = el( 'tr' );
 		columns.forEach( ( column ) => head.append( el( 'th', { scope: 'col', 'data-column': column.key, text: column.label } ) ) );
 		table.append( el( 'thead', {}, [ head ] ) );
@@ -162,8 +250,10 @@
 			body.append( row );
 		} );
 		table.append( body );
+		scroll.append( table );
 		holder.textContent = '';
-		holder.append( table );
+		holder.append( scroll );
+		holder.removeAttribute( 'aria-busy' );
 	}
 
 	function detailList( call ) {
@@ -202,12 +292,22 @@
 		if ( button && dialog && window.wp && window.wp.apiFetch ) {
 			opener = button;
 			const body = dialog.querySelector( '[data-aag-detail]' );
-			body.textContent = __( 'Loading the call', 'axle-ai-guard' );
+			body.textContent = '';
+			body.setAttribute( 'aria-busy', 'true' );
+			body.append( el( 'span', { class: 'spinner is-active aag-spinner' } ), ' ' + __( 'Loading the call', 'axle-ai-guard' ) );
 			dialog.showModal();
-			window.wp.apiFetch( { path: '/axle-ai-guard/v1/calls/' + button.dataset.id } ).then( ( call ) => {
-				body.textContent = '';
-				body.append( detailList( call ) );
-			} );
+			window.wp
+				.apiFetch( { path: '/axle-ai-guard/v1/calls/' + button.dataset.id } )
+				.then( ( call ) => {
+					body.textContent = '';
+					body.removeAttribute( 'aria-busy' );
+					body.append( detailList( call ) );
+				} )
+				.catch( () => {
+					body.textContent = __( 'This call could not be loaded. Close the dialog and try again, or reload the page.', 'axle-ai-guard' );
+					body.removeAttribute( 'aria-busy' );
+					speak( body.textContent );
+				} );
 			return;
 		}
 		if ( event.target.closest( '.aag-modal-close' ) && dialog ) {
@@ -226,6 +326,10 @@
 	);
 
 	function start() {
+		const done = document.querySelector( '.aag-done' );
+		if ( done ) {
+			speak( done.textContent.trim() );
+		}
 		renderCards();
 		renderCalls();
 

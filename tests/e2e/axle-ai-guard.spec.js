@@ -141,7 +141,7 @@ test.describe( 'Axle AI Guard', () => {
 			// No ability turns a switch back off.
 			const list = await agent.call( 'GET', '/wp-abilities/v1/abilities?category=axle-ai-guard&per_page=50' );
 			const names = list.body.map( ( ability ) => ability.name ).sort();
-			expect( names ).toEqual( [ 'axle-ai-guard/engage-kill-switch', 'axle-ai-guard/get-limits', 'axle-ai-guard/get-usage', 'axle-ai-guard/list-calls', 'axle-ai-guard/test-data-rules' ] );
+			expect( names ).toEqual( [ 'axle-ai-guard/engage-kill-switch', 'axle-ai-guard/get-limits', 'axle-ai-guard/get-runaway-status', 'axle-ai-guard/get-usage', 'axle-ai-guard/list-calls', 'axle-ai-guard/test-data-rules' ] );
 		} finally {
 			await agent.dispose();
 		}
@@ -155,6 +155,8 @@ test.describe( 'Axle AI Guard', () => {
 		await page.goto( SCREEN );
 		await page.getByLabel( 'Reason' ).fill( 'Provider outage' );
 		await page.getByRole( 'button', { name: 'Switch all AI off' } ).click();
+		await expect( page.locator( '.axle-confirm' ) ).toContainText( 'can turn it back on' );
+		await page.locator( '.axle-confirm' ).getByRole( 'button', { name: 'Switch all AI off' } ).click();
 		await expect( page.locator( '.aag-kill-notice' ) ).toBeVisible();
 		await expect( page.locator( '#wp-admin-bar-axle-ai-guard' ) ).toContainText( 'AI is off' );
 		expect( option( 'axle_ai_guard_kill' ).global.reason ).toBe( 'Provider outage' );
@@ -211,12 +213,17 @@ test.describe( 'Axle AI Guard', () => {
 
 	test( 'the test box runs the rules with no AI call', async ( { page } ) => {
 		await page.goto( `${ SCREEN }&tab=rules` );
-		await page.getByLabel( 'Paste text. Nothing is sent to any AI provider.' ).fill( 'Call +91 98765 43210 or mail admin@example.com' );
-		await page.getByRole( 'button', { name: 'Test', exact: true } ).click();
+		await page.getByLabel( 'Text to check' ).fill( 'Call +91 98765 43210 or mail admin@example.com' );
+		await page.getByRole( 'button', { name: 'Check the text' } ).click();
 		const result = page.locator( '.aag-test-result' );
+		await expect( result ).toContainText( 'Sent redacted' );
+		await expect( result ).toContainText( 'data:user_email' );
 		await expect( result ).toContainText( 'Emails of registered users: 1 found, mode redact' );
 		await expect( result ).toContainText( 'Phone numbers: 1 found, mode log' );
-		await expect( result.locator( 'pre' ) ).toContainText( '[redacted:user_email]' );
+		await expect( result.locator( 'mark.aag-mark--redact' ) ).toContainText( 'admin@example.com' );
+		await expect( result.locator( '.axle-diff ins' ) ).toContainText( '[redacted:user_email]' );
+		expect( option( 'aag_fixture_bodies' ) ).toBeNull();
+		expect( one( "SELECT COUNT(*) FROM wp_options WHERE option_value LIKE '%98765 43210%'" ) ).toBe( '0' );
 		expect( callCount() ).toBe( 0 );
 		expect( bodies() ).toEqual( [] );
 	} );
@@ -261,7 +268,12 @@ test.describe( 'Axle AI Guard', () => {
 		await expect( page.locator( '.notice-success' ) ).toContainText( 'Prices saved.' );
 		expect( option( 'axle_ai_guard_prices' ).models[ 'aag-fixture/fixture-model' ].input ).toBe( 20 );
 
+		await page.getByRole( 'button', { name: 'Preview the change' } ).click();
+		await expect( page.locator( '.aag-done' ) ).toContainText( 'would change 1 of 1 calls' );
+		expect( one( 'SELECT cost_micros FROM wp_axle_ai_guard_calls ORDER BY id DESC LIMIT 1' ) ).toBe( '1800' );
+
 		await page.getByRole( 'button', { name: 'Recalculate the last 30 days' } ).click();
+		await page.locator( '.axle-confirm' ).getByRole( 'button', { name: 'Recalculate the last 30 days' } ).click();
 		await expect( page.locator( '.notice-success' ) ).toContainText( 'recalculated' );
 		// 120 x 20 + 30 x 20.
 		expect( one( 'SELECT cost_micros FROM wp_axle_ai_guard_calls ORDER BY id DESC LIMIT 1' ) ).toBe( '3000' );
@@ -279,6 +291,75 @@ test.describe( 'Axle AI Guard', () => {
 		await expect( page.locator( '.notice-success' ) ).toContainText( 'Caller updated.' );
 		expect( option( 'axle_ai_guard_seen_callers' )[ 'caller-b' ].status ).toBe( 'approved' );
 		expect( ( await call( 'caller-b' ) ).ok ).toBe( true );
+	} );
+
+	test( 'a runaway caller is paused, alerted and resumed with one click', async ( { page } ) => {
+		wp( 'axle-ai-guard', 'settings', 'set', 'runaway_mode', 'pause' );
+		wp( 'axle-ai-guard', 'settings', 'set', 'runaway_min_calls', '10' );
+		await call( 'caller-a' );
+		// Ten calls in the hour reach the floor of 10 with no history behind them.
+		for ( let i = 0; i < 9; i++ ) {
+			await call( 'caller-a' );
+		}
+		expect( option( 'axle_ai_guard_kill' ).plugin[ 'caller-a' ].reason ).toContain( 'Runaway' );
+		expect( ( await call( 'caller-a' ) ).ok ).toBe( false );
+		expect( ( await call( 'caller-b' ) ).ok ).toBe( true );
+		const status = JSON.parse( wp( 'axle-ai-guard', 'runaway', 'status', '--format=json' ) );
+		expect( status.find( ( row ) => 'caller-a' === row.caller ) ).toMatchObject( { paused: 'yes' } );
+
+		await page.goto( '/wp-admin/index.php' );
+		const notice = page.locator( '.aag-runaway-notice' );
+		await expect( notice ).toContainText( 'caller-a may be running away' );
+		await expect( notice ).toContainText( 'Its AI calls are paused' );
+		await notice.getByRole( 'button', { name: 'Resume and raise the limit' } ).click();
+		await expect( page.locator( '.aag-done' ) ).toContainText( 'limit for this plugin is higher' );
+		expect( option( 'axle_ai_guard_kill' ).plugin ).toEqual( [] );
+		expect( option( 'axle_ai_guard_runaway' ).limits[ 'caller-a' ].calls ).toBeGreaterThanOrEqual( 20 );
+		expect( ( await call( 'caller-a' ) ).ok ).toBe( true );
+	} );
+
+	test( 'the forecast says when a monthly budget runs out', async ( { page } ) => {
+		await call( 'caller-a' );
+		wp( 'axle-ai-guard', 'budget', 'set', 'global', '--monthly-cost=0.0019' );
+		await page.goto( SCREEN );
+		await expect( page.locator( '.aag-forecast' ) ).toContainText( 'Whole site' );
+		await expect( page.locator( '.aag-forecast' ) ).toContainText( /Runs out early|Used up/ );
+		const out = wp( 'axle-ai-guard', 'runaway', 'status' );
+		expect( out ).toContain( 'Forecast for global' );
+	} );
+
+	test( 'prices export, import and undo', async ( { page } ) => {
+		await page.goto( `${ SCREEN }&tab=prices` );
+		await page.locator( '#aag-import-json' ).fill( '{"models":{"acme/model-z":{"input":3,"output":4}}}' );
+		await page.getByRole( 'button', { name: 'Import prices' } ).first().click();
+		await page.locator( '.axle-confirm' ).getByRole( 'button', { name: 'Import prices' } ).click();
+		await expect( page.locator( '.aag-done' ) ).toContainText( 'Prices imported' );
+		expect( option( 'axle_ai_guard_prices' ).models[ 'acme/model-z' ].input ).toBe( 3 );
+		expect( wp( 'axle-ai-guard', 'prices', 'export' ) ).toContain( 'acme/model-z' );
+
+		await page.locator( '.aag-done' ).getByRole( 'button', { name: 'Undo' } ).click();
+		await expect( page.locator( '.aag-done' ) ).toContainText( 'undone' );
+		expect( ( option( 'axle_ai_guard_prices' ) || { models: {} } ).models[ 'acme/model-z' ] ).toBeUndefined();
+	} );
+
+	test( 'a model without a price is flagged and can be priced', async ( { page } ) => {
+		wp( 'option', 'delete', 'axle_ai_guard_prices' );
+		await call( 'caller-a' );
+		await page.goto( `${ SCREEN }&tab=prices` );
+		await expect( page.locator( '.aag-unpriced' ) ).toContainText( 'aag-fixture/fixture-model' );
+		await page.locator( '.aag-unpriced' ).getByRole( 'link', { name: 'Add a price' } ).first().click();
+		await expect( page.locator( '#aag-price-new' ) ).toHaveValue( 'aag-fixture/fixture-model' );
+	} );
+
+	test( 'the Plugins screen links to AI Guard and the admin bar uses core styling', async ( { page } ) => {
+		await page.goto( '/wp-admin/plugins.php' );
+		await expect( page.locator( 'tr[data-slug="axle-ai-guard"] .row-actions a, tr[data-slug="axle-ai-guard"] .plugin-title ~ .row-actions a', { hasText: 'Open AI Guard' } ).first() ).toBeVisible();
+		wp( 'axle-ai-guard', 'kill' );
+		await page.goto( '/wp-admin/index.php' );
+		const item = page.locator( '#wp-admin-bar-axle-ai-guard > .ab-item' );
+		await expect( item ).toContainText( 'AI is off' );
+		const background = await item.evaluate( ( node ) => getComputedStyle( node ).backgroundColor );
+		expect( background ).not.toBe( 'rgb(138, 36, 36)' );
 	} );
 
 	test( 'JavaScript hooks: columns, cards, cost format and the kill switch action', async ( { page } ) => {
@@ -303,7 +384,10 @@ test.describe( 'Axle AI Guard', () => {
 			window.wp.hooks.addAction( 'axleAiGuard.killSwitchToggled', 'e2e', ( result ) => window.sessionStorage.setItem( 'aagToggled', JSON.stringify( result ) ) )
 		);
 		await page.locator( 'tr[data-caller="caller-a"]' ).getByRole( 'button', { name: 'Switch off' } ).click();
+		await page.locator( '.axle-confirm' ).getByRole( 'button', { name: 'Switch off' } ).click();
 		await expect( page.locator( 'tr[data-caller="caller-a"]' ).getByRole( 'button', { name: 'Turn on' } ) ).toBeVisible();
+		await expect( page.locator( '.aag-done' ) ).toContainText( 'Switched off' );
+		await expect( page.locator( '.aag-done' ).getByRole( 'button', { name: /Undo/ } ) ).toBeVisible();
 		expect( JSON.parse( await page.evaluate( () => window.sessionStorage.getItem( 'aagToggled' ) ) ) ).toMatchObject( { scope: 'plugin', subject: 'caller-a', on: true, changed: true } );
 		expect( option( 'axle_ai_guard_kill' ).plugin[ 'caller-a' ] ).toBeTruthy();
 	} );

@@ -17,6 +17,7 @@ defined( 'ABSPATH' ) || exit;
 final class Prices {
 
 	public const OPTION = 'axle_ai_guard_prices';
+	public const UNDO   = 'axle_ai_guard_prices_undo';
 
 	/**
 	 * The date the default table was checked against the providers' price pages.
@@ -125,11 +126,13 @@ final class Prices {
 	}
 
 	/**
-	 * Saves the whole table.
+	 * Saves the whole table. The table it replaces is kept once, for undo().
 	 *
 	 * @param array $table Prices keyed by provider/model.
 	 */
 	public function save( array $table ): void {
+		$this->remember();
+
 		update_option(
 			self::OPTION,
 			array(
@@ -137,6 +140,105 @@ final class Prices {
 				'models' => self::sanitize( $table ),
 			),
 			false
+		);
+
+		/**
+		 * Fires after the price table was saved.
+		 *
+		 * @param array $table The saved table, keyed by provider/model.
+		 */
+		do_action( 'axle_ai_guard_prices_saved', self::sanitize( $table ) );
+	}
+
+	/**
+	 * Keeps the table in use, or "the shipped one", for undo().
+	 */
+	private function remember(): void {
+		$saved = get_option( self::OPTION, null );
+		update_option( self::UNDO, is_array( $saved ) && isset( $saved['models'] ) ? $saved : 'defaults', false );
+	}
+
+	/**
+	 * Whether the last change to the table can be undone.
+	 *
+	 * @return bool
+	 */
+	public function can_undo(): bool {
+		return false !== get_option( self::UNDO, false );
+	}
+
+	/**
+	 * Puts the table back as it was before the last save, import or reset.
+	 *
+	 * @return bool Whether there was something to undo.
+	 */
+	public function undo(): bool {
+		$before = get_option( self::UNDO, false );
+		if ( false === $before ) {
+			return false;
+		}
+
+		if ( is_array( $before ) ) {
+			update_option( self::OPTION, $before, false );
+		} else {
+			delete_option( self::OPTION );
+		}
+		delete_option( self::UNDO );
+
+		return true;
+	}
+
+	/**
+	 * The table as JSON, for export.
+	 *
+	 * @return string
+	 */
+	public function export_json(): string {
+		return (string) wp_json_encode(
+			array(
+				'as_of'    => $this->as_of(),
+				'currency' => $this->currency(),
+				'unit'     => 'Price per million tokens in the site currency.',
+				'models'   => $this->table(),
+			),
+			JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
+		);
+	}
+
+	/**
+	 * Adds the prices in a JSON export to the table, over the same keys.
+	 *
+	 * @param string $json JSON from export_json(), or just the models object.
+	 * @return array{imported: int, skipped: int}|\WP_Error
+	 */
+	public function import_json( string $json ) {
+		/**
+		 * Filters the most models one import may add.
+		 *
+		 * @param int $max Default 500.
+		 */
+		$max = max( 1, (int) apply_filters( 'axle_ai_guard_prices_import_max', 500 ) );
+
+		$data = json_decode( $json, true );
+		if ( ! is_array( $data ) ) {
+			return new \WP_Error( 'axle_ai_guard_import_invalid', __( 'That is not valid JSON. Paste a price table you exported from AI Guard.', 'axle-ai-guard' ) );
+		}
+		$models = isset( $data['models'] ) && is_array( $data['models'] ) ? $data['models'] : $data;
+		if ( ! $models || count( $models ) > $max ) {
+			/* translators: %d: most models per import. */
+			return new \WP_Error( 'axle_ai_guard_import_size', sprintf( __( 'The import has no models, or more than %d. Split it up.', 'axle-ai-guard' ), $max ) );
+		}
+
+		$clean = self::sanitize( $models );
+		if ( ! $clean ) {
+			return new \WP_Error( 'axle_ai_guard_import_empty', __( 'No model in the JSON has a valid provider/model key with an input and output price.', 'axle-ai-guard' ) );
+		}
+
+		$this->save( array_merge( $this->table(), $clean ) );
+
+		return array(
+			'imported' => count( $clean ),
+			'skipped'  => count( $models ) - count( $clean ),
 		);
 	}
 
@@ -170,6 +272,7 @@ final class Prices {
 	 * Back to the shipped table.
 	 */
 	public function reset(): void {
+		$this->remember();
 		delete_option( self::OPTION );
 	}
 

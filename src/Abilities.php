@@ -40,16 +40,34 @@ final class Abilities implements Service {
 	private Calls $calls;
 
 	/**
+	 * Runaway guard.
+	 *
+	 * @var Runaway
+	 */
+	private Runaway $runaway;
+
+	/**
+	 * Forecast.
+	 *
+	 * @var Forecast
+	 */
+	private Forecast $forecast;
+
+	/**
 	 * Sets up the abilities.
 	 *
-	 * @param Reports    $reports Reports.
-	 * @param KillSwitch $kill    Kill switches.
-	 * @param Calls      $calls   The call log.
+	 * @param Reports    $reports  Reports.
+	 * @param KillSwitch $kill     Kill switches.
+	 * @param Calls      $calls    The call log.
+	 * @param Runaway    $runaway  Runaway guard.
+	 * @param Forecast   $forecast Forecast.
 	 */
-	public function __construct( Reports $reports, KillSwitch $kill, Calls $calls ) {
-		$this->reports = $reports;
-		$this->kill    = $kill;
-		$this->calls   = $calls;
+	public function __construct( Reports $reports, KillSwitch $kill, Calls $calls, Runaway $runaway, Forecast $forecast ) {
+		$this->reports  = $reports;
+		$this->kill     = $kill;
+		$this->calls    = $calls;
+		$this->runaway  = $runaway;
+		$this->forecast = $forecast;
 	}
 
 	/**
@@ -257,13 +275,18 @@ final class Abilities implements Service {
 			array(
 				'type'                 => 'object',
 				'properties'           => array(
-					'text'   => array(
+					'text'    => array(
 						'type'      => 'string',
 						'maxLength' => 200000,
 					),
-					'plugin' => array(
+					'plugin'  => array(
 						'type'        => 'string',
 						'description' => 'Caller key, for per-plugin modes.',
+					),
+					'context' => array(
+						'type'        => 'string',
+						'enum'        => Settings::CONTEXTS,
+						'description' => 'Request context the rules are checked in. Default admin.',
 					),
 				),
 				'required'             => array( 'text' ),
@@ -275,9 +298,33 @@ final class Abilities implements Service {
 					'findings' => array( 'type' => 'array' ),
 					'redacted' => array( 'type' => 'string' ),
 					'blocked'  => array( 'type' => 'boolean' ),
+					'outcome'  => array(
+						'type' => 'string',
+						'enum' => array( 'sent', 'redacted', 'blocked' ),
+					),
+					'rule'     => array(
+						'type'        => 'string',
+						'description' => 'The rule that decided, such as data:email. Empty when the text goes out as it is.',
+					),
+					'spans'    => array( 'type' => 'array' ),
 				),
 			),
 			array( $this, 'test_data_rules' ),
+			$readonly
+		);
+
+		$this->ability(
+			'get-runaway-status',
+			__( 'Get runaway protection status', 'axle-ai-guard' ),
+			__( 'The runaway mode, each plugin\'s AI calls this hour against its usual number and its limit, the runaway events waiting for a person, and the month-end forecast of each monthly budget. An agent can pause a plugin with the kill switch ability; only a person resumes it.', 'axle-ai-guard' ),
+			array(
+				'type'                 => 'object',
+				'properties'           => array(),
+				'additionalProperties' => false,
+				'default'              => array(),
+			),
+			array( 'type' => 'object' ),
+			array( $this, 'get_runaway_status' ),
 			$readonly
 		);
 	}
@@ -373,7 +420,22 @@ final class Abilities implements Service {
 	public function test_data_rules( $input = null ): array {
 		$input = (array) $input;
 
-		return $this->reports->test_rules( (string) ( $input['text'] ?? '' ), (string) ( $input['plugin'] ?? '' ) );
+		return $this->reports->test_rules( (string) ( $input['text'] ?? '' ), (string) ( $input['plugin'] ?? '' ), (string) ( $input['context'] ?? '' ) );
+	}
+
+	/**
+	 * Ability: runaway status and forecasts.
+	 *
+	 * @return array
+	 */
+	public function get_runaway_status(): array {
+		return array(
+			'mode'     => $this->runaway->mode(),
+			'multiple' => $this->runaway->multiple(),
+			'callers'  => $this->runaway->callers(),
+			'events'   => $this->runaway->open_events(),
+			'forecast' => $this->forecast->all(),
+		);
 	}
 
 	/**

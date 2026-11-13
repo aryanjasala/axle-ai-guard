@@ -251,6 +251,59 @@ final class Detectors {
 	}
 
 	/**
+	 * Where each detector that is not off finds something in a text, for highlighting.
+	 * Overlapping matches keep the one that starts first, then the longer one.
+	 *
+	 * @param string $text   Text.
+	 * @param string $caller Caller key.
+	 * @return array<int, array{start: int, length: int, id: string, label: string, mode: string}> Byte offsets, in order.
+	 */
+	public function locate( string $text, string $caller = '' ): array {
+		$spans = array();
+		if ( '' === $text ) {
+			return $spans;
+		}
+
+		foreach ( $this->all() as $id => $detector ) {
+			$mode = $this->mode( $id, $caller );
+			if ( 'off' === $mode ) {
+				continue;
+			}
+			foreach ( self::run( $detector['match'], $text ) as $match ) {
+				$offset = 0;
+				while ( false !== ( $at = strpos( $text, $match, $offset ) ) ) { // phpcs:ignore Generic.CodeAnalysis.AssignmentInCondition.FoundInWhileCondition -- Walks every occurrence.
+					$spans[] = array(
+						'start'  => $at,
+						'length' => strlen( $match ),
+						'id'     => (string) $id,
+						'label'  => (string) $detector['label'],
+						'mode'   => $mode,
+					);
+					$offset  = $at + strlen( $match );
+				}
+			}
+		}
+
+		usort(
+			$spans,
+			static function ( array $a, array $b ): int {
+				return $a['start'] === $b['start'] ? $b['length'] <=> $a['length'] : $a['start'] <=> $b['start'];
+			}
+		);
+
+		$kept = array();
+		$end  = 0;
+		foreach ( $spans as $span ) {
+			if ( $span['start'] >= $end ) {
+				$kept[] = $span;
+				$end    = $span['start'] + $span['length'];
+			}
+		}
+
+		return $kept;
+	}
+
+	/**
 	 * Replaces what the given detectors find with placeholders.
 	 *
 	 * @param string   $text Text.

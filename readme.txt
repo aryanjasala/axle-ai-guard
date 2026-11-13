@@ -23,17 +23,19 @@ Part of Axle by AryanX, a family of plugins for running WordPress sites safely.
 * Detectors for emails of registered users, any email address, phone numbers, IP addresses, payment card numbers (with the Luhn check), password hashes, WordPress salts and keys, connector API keys and other secret options, plus your own strings and regular expressions.
 * Each detector is off, log, redact or block. By default user emails are redacted, and password hashes, salts and API keys are blocked. The rest are logged.
 * Redact replaces the value with a placeholder in the request body before it leaves the site, for OpenAI, Anthropic and Google request formats. No map back to the original value is kept.
-* A test box runs the rules on pasted text, with no AI call.
+* Try your rules: paste text, pick a plugin and a context, and see every match marked and labelled, the outcome (sent as it is, sent redacted, blocked) and the rule that decided. The text is never stored and never sent anywhere.
 
 **Budgets and limits:**
 
 * Daily and monthly budgets in tokens and in money, for the whole site and per plugin. An alert at 80% (you pick the share), a block at 100%.
+* A forecast says when each monthly budget runs out at the pace of the last 7 days, for the site and per plugin, with one alert a month.
 * Rate limits per plugin (60 calls a minute), per logged-in user (20), per visitor IP address (5, so a chatbot or a form cannot become a free AI proxy) and for the site (120).
 * Allowed contexts (front end, wp-admin, REST, Ajax, cron, WP-CLI), providers, models and roles, per plugin or for the site.
 
 **Kill switches:**
 
 * For the whole site, one plugin, one provider or one context, from the screen, WP-CLI, an ability or the `AXLE_AI_GUARD_KILL` constant in wp-config.php. On multisite, a network switch.
+* Runaway protection learns how many calls each plugin makes in a normal hour. A plugin that makes ten times that (and at least 100 in an hour) is paused on its own on new installs, or flagged on existing ones, you get an alert, and one click resumes it, with or without a higher limit.
 * Optional auto-trip when the monthly money budget is reached, or when too many calls fail in 5 minutes.
 * While a switch is on, administrators see a notice and "AI is off" in the toolbar.
 
@@ -41,7 +43,7 @@ Part of Axle by AryanX, a family of plugins for running WordPress sites safely.
 
 * Every call: which plugin made it (and the file it was traced to), context, user, provider, model, tokens, estimated cost, duration, HTTP status and bytes.
 * A data profile instead of the prompt: message count, characters per role, attached file types and sizes, what the detectors found and what was done. Previews and a full redacted prompt store are there for debugging, off by default.
-* Costs come from a price table per provider and model that ships with list prices and that you can edit.
+* Costs come from a price table per provider and model that ships with list prices. You can edit it, export and import it as JSON, undo the last change, and models with no price are flagged with a link to add one.
 
 **Callers:**
 
@@ -70,7 +72,7 @@ The checks that need no model (kill switches, approvals, contexts, roles, used-u
 
 * `wp axle-ai-guard usage [--period=day|month] [--by=plugin|provider|model|user]` and `calls`, `call <id>` read the log.
 * `wp axle-ai-guard kill [--plugin=<caller>] [--provider=<id>] [--context=<context>]` and `resume [--all]` work the switches.
-* `wp axle-ai-guard budget set global --monthly-cost=50`, `limit set plugin:<caller> --per-minute=10`, `rules list|set|test`, `prices list|set|reset|recalc`, `callers`, `approve`, `deny`, `settings` and `prune` cover the rest.
+* `wp axle-ai-guard budget set global --monthly-cost=50`, `limit set plugin:<caller> --per-minute=10`, `rules list|set|test`, `runaway status|resume`, `prices list|set|reset|undo|export|import|missing|recalc`, `callers`, `approve`, `deny`, `settings` and `prune` cover the rest.
 
 = For developers =
 
@@ -100,7 +102,7 @@ A `WP_Error`, as it would for any failed AI call. `prompt_prevented` (503) for k
 
 = Can an AI agent turn the guard off? =
 
-No. Agents get abilities to read usage, calls and limits, test the data rules and switch AI off. No ability turns a switch back on, raises a budget or loosens a rule. Only a person in wp-admin or on WP-CLI can.
+No. Agents get abilities to read usage, calls, limits and runaway status, test the data rules and switch AI off or pause a plugin. No ability turns a switch back on or resumes a plugin, raises a budget or loosens a rule. Only a person in wp-admin or on WP-CLI can.
 
 = Does it work with the official AI plugin? =
 
@@ -116,7 +118,7 @@ Yes, per site: each site has its own log, budgets and rules. Network Admin has a
 2. Calls: every AI call with caller, status, model, tokens and cost.
 3. Call details: the file the call was traced to, the data profile, what was found and redacted, tokens, cost and timing.
 4. Budgets and limits per plugin: tokens and money, rate limits, contexts, providers, models and roles.
-5. Data rules with the test box: what each detector found and what the provider would get.
+5. Data rules with Try your rules: each match marked and labelled, the outcome and the rule that decided.
 6. Prices per provider and model, editable, with the date they are from.
 
 == Changelog ==

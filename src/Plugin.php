@@ -105,6 +105,20 @@ final class Plugin {
 	private Cleanup $cleanup;
 
 	/**
+	 * Runaway guard.
+	 *
+	 * @var Runaway
+	 */
+	private Runaway $runaway;
+
+	/**
+	 * Month-end forecast.
+	 *
+	 * @var Forecast
+	 */
+	private Forecast $forecast;
+
+	/**
 	 * Starts the plugin. Runs on `plugins_loaded`.
 	 */
 	public static function boot(): void {
@@ -159,8 +173,10 @@ final class Plugin {
 		$this->prices    = new Prices( $this->settings );
 		$this->calls     = new Calls();
 		$this->guard     = new Guard( $this->settings, $this->policy, $this->kill, $this->detectors, $this->prices, $this->calls, $this->alerts );
-		$this->reports   = new Reports( $this->settings, $this->policy, $this->kill, $this->detectors, $this->prices, $this->calls, $this->usage );
+		$this->reports   = new Reports( $this->settings, $this->policy, $this->kill, $this->detectors, $this->prices, $this->calls, $this->usage, $this->guard );
 		$this->cleanup   = new Cleanup( $this->settings, $this->calls, $this->usage, $this->prices );
+		$this->runaway   = new Runaway( $this->settings, $this->kill, $this->usage, $this->alerts );
+		$this->forecast  = new Forecast( $this->settings, $this->policy, $this->usage, $this->alerts, $this->runaway );
 	}
 
 	/**
@@ -191,6 +207,24 @@ final class Plugin {
 	}
 
 	/**
+	 * The runaway guard, for other plugins.
+	 *
+	 * @return Runaway
+	 */
+	public function runaway(): Runaway {
+		return $this->runaway;
+	}
+
+	/**
+	 * The forecast, for other plugins.
+	 *
+	 * @return Forecast
+	 */
+	public function forecast(): Forecast {
+		return $this->forecast;
+	}
+
+	/**
 	 * Registers the services.
 	 */
 	private function register(): void {
@@ -201,12 +235,14 @@ final class Plugin {
 			$this->kill,
 			new Direct( $this->settings, $this->guard, $this->kill, $this->policy, $this->calls, $this->prices ),
 			$this->cleanup,
+			$this->runaway,
+			$this->forecast,
 			new Privacy( $this->calls ),
-			new Abilities( $this->reports, $this->kill, $this->calls ),
-			new Controller( $this->reports, $this->kill, $this->calls ),
-			new Page( $this->settings, $this->policy, $this->kill, $this->detectors, $this->prices, $this->calls, $this->reports, $this->cleanup ),
+			new Abilities( $this->reports, $this->kill, $this->calls, $this->runaway, $this->forecast ),
+			new Controller( $this->reports, $this->kill, $this->calls, $this->runaway, $this->prices ),
+			new Page( $this->settings, $this->policy, $this->kill, $this->detectors, $this->prices, $this->calls, $this->reports, $this->cleanup, $this->runaway, $this->forecast ),
 			new Network( $this->usage ),
-			new SiteHealth( $this->settings, $this->calls, $this->policy ),
+			new SiteHealth( $this->settings, $this->calls, $this->policy, $this->runaway, $this->forecast ),
 		);
 
 		foreach ( $services as $service ) {
@@ -214,7 +250,7 @@ final class Plugin {
 		}
 
 		if ( defined( 'WP_CLI' ) && WP_CLI ) {
-			\WP_CLI::add_command( 'axle-ai-guard', new Command( $this->settings, $this->kill, $this->detectors, $this->prices, $this->calls, $this->reports, $this->cleanup ) );
+			\WP_CLI::add_command( 'axle-ai-guard', new Command( $this->settings, $this->kill, $this->detectors, $this->prices, $this->calls, $this->reports, $this->cleanup, $this->runaway, $this->forecast ) );
 		}
 	}
 }

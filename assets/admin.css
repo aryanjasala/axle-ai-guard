@@ -33,17 +33,8 @@
 	gap: 6px;
 }
 
-.aag-bar progress {
+.aag-bar .axle-progress {
 	width: 90px;
-	accent-color: var(--axle-accent);
-}
-
-.aag-bar-soft progress {
-	accent-color: var(--axle-warning-line);
-}
-
-.aag-bar-full progress {
-	accent-color: var(--axle-error-line);
 }
 
 .aag-switches {
@@ -63,10 +54,6 @@
 	align-items: center;
 	gap: 8px 16px;
 	margin: 0 0 16px;
-}
-
-.aag-calls {
-	overflow-x: auto;
 }
 
 .aag-modal {
@@ -135,8 +122,41 @@
 	white-space: pre-wrap;
 }
 
-/* The admin bar is outside .axle-ui, so the error colours are written out. */
-#wpadminbar .aag-adminbar > .ab-item {
-	background: #8a2424;
-	color: #fff;
+/* Try your rules: matches are marked with a tone, and always labelled in words. */
+.aag-marked {
+	padding: 8px;
+	overflow-wrap: anywhere;
+	white-space: pre-wrap;
+	background: var(--axle-neutral-bg);
+	border: 1px solid var(--axle-border);
+}
+
+.aag-mark {
+	padding: 0 2px;
+	color: inherit;
+	border-bottom: 2px solid var(--axle-neutral-line);
+}
+
+.aag-mark--redact {
+	background: var(--axle-info-bg);
+	border-color: var(--axle-info-line);
+}
+
+.aag-mark--block {
+	background: var(--axle-error-bg);
+	border-color: var(--axle-error-line);
+}
+
+.aag-mark--log {
+	background: var(--axle-warning-bg);
+	border-color: var(--axle-warning-line);
+}
+
+.aag-mark__label {
+	font-size: 11px;
+	color: var(--axle-muted);
+}
+
+.aag-runaway-notice .aag-inline-form {
+	margin: 0 0 8px;
 }

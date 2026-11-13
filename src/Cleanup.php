@@ -141,18 +141,30 @@ final class Cleanup implements Service {
 
 	/**
 	 * Recalculates the cost of successful calls with the current prices,
-	 * and moves the difference into the usage counters.
+	 * and moves the difference into the usage counters. Works in batches and
+	 * stops when its time is up; call it again with the returned "next" id to
+	 * go on.
 	 *
-	 * @param int $days How far back.
-	 * @return array{rows: int, changed: int, delta: int}
+	 * @param int  $days    How far back.
+	 * @param bool $dry_run Count what would change and change nothing.
+	 * @param int  $after   Last call id handled, to continue an earlier run.
+	 * @return array{rows: int, changed: int, delta: int, complete: bool, next: int}
 	 */
-	public function recalculate( int $days = 30 ): array {
-		$since   = gmdate( 'Y-m-d H:i:s', time() - max( 1, $days ) * DAY_IN_SECONDS );
-		$after   = 0;
-		$summary = array(
-			'rows'    => 0,
-			'changed' => 0,
-			'delta'   => 0,
+	public function recalculate( int $days = 30, bool $dry_run = false, int $after = 0 ): array {
+		$since = gmdate( 'Y-m-d H:i:s', time() - max( 1, $days ) * DAY_IN_SECONDS );
+
+		/**
+		 * Filters how many seconds one recalculation request may run before it stops and asks to be continued.
+		 *
+		 * @param int $seconds Default 15.
+		 */
+		$deadline = microtime( true ) + max( 1, (int) apply_filters( 'axle_ai_guard_recalc_seconds', 15 ) );
+		$summary  = array(
+			'rows'     => 0,
+			'changed'  => 0,
+			'delta'    => 0,
+			'complete' => true,
+			'next'     => 0,
 		);
 
 		do {
@@ -163,6 +175,11 @@ final class Cleanup implements Service {
 				$cost  = $this->prices->cost( (string) $row['provider'], (string) $row['model'], (int) $row['prompt_tokens'], (int) $row['completion_tokens'], (int) $row['thought_tokens'] );
 				$delta = $cost - (int) $row['cost_micros'];
 				if ( 0 === $delta ) {
+					continue;
+				}
+				++$summary['changed'];
+				$summary['delta'] += $delta;
+				if ( $dry_run ) {
 					continue;
 				}
 
@@ -186,11 +203,25 @@ final class Cleanup implements Service {
 						$this->usage->bump( $period, $subject, 0, 0, $delta );
 					}
 				}
-				++$summary['changed'];
-				$summary['delta'] += $delta;
 			}
+
 			$full = 500 === count( $batch );
+			if ( $full && microtime( true ) > $deadline ) {
+				$summary['complete'] = false;
+				$summary['next']     = $after;
+				break;
+			}
 		} while ( $full );
+
+		if ( ! $dry_run ) {
+			/**
+			 * Fires after costs were recalculated, once per request that did work.
+			 *
+			 * @param array $summary rows, changed, delta, complete and next.
+			 * @param int   $days    How far back it looked.
+			 */
+			do_action( 'axle_ai_guard_costs_recalculated', $summary, $days );
+		}
 
 		return $summary;
 	}

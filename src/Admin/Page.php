@@ -10,12 +10,14 @@ namespace AryanX\Axle\AiGuard\Admin;
 use AryanX\Axle\AiGuard\Calls;
 use AryanX\Axle\AiGuard\Cleanup;
 use AryanX\Axle\AiGuard\Detectors;
+use AryanX\Axle\AiGuard\Forecast;
 use AryanX\Axle\AiGuard\Guard;
 use AryanX\Axle\AiGuard\KillSwitch;
 use AryanX\Axle\AiGuard\Plugin;
 use AryanX\Axle\AiGuard\Policy;
 use AryanX\Axle\AiGuard\Prices;
 use AryanX\Axle\AiGuard\Reports;
+use AryanX\Axle\AiGuard\Runaway;
 use AryanX\Axle\AiGuard\Service;
 use AryanX\Axle\AiGuard\Settings;
 use const AryanX\Axle\AiGuard\PLUGIN_FILE;
@@ -89,6 +91,20 @@ final class Page implements Service {
 	private Cleanup $cleanup;
 
 	/**
+	 * Runaway guard.
+	 *
+	 * @var Runaway
+	 */
+	private Runaway $runaway;
+
+	/**
+	 * Month-end forecast.
+	 *
+	 * @var Forecast
+	 */
+	private Forecast $forecast;
+
+	/**
 	 * Sets up the screen.
 	 *
 	 * @param Settings   $settings  Settings.
@@ -99,8 +115,10 @@ final class Page implements Service {
 	 * @param Calls      $calls     The call log.
 	 * @param Reports    $reports   Reports.
 	 * @param Cleanup    $cleanup   Clean-up.
+	 * @param Runaway    $runaway   Runaway guard.
+	 * @param Forecast   $forecast  Forecast.
 	 */
-	public function __construct( Settings $settings, Policy $policy, KillSwitch $kill, Detectors $detectors, Prices $prices, Calls $calls, Reports $reports, Cleanup $cleanup ) {
+	public function __construct( Settings $settings, Policy $policy, KillSwitch $kill, Detectors $detectors, Prices $prices, Calls $calls, Reports $reports, Cleanup $cleanup, Runaway $runaway, Forecast $forecast ) {
 		$this->settings  = $settings;
 		$this->policy    = $policy;
 		$this->kill      = $kill;
@@ -109,6 +127,8 @@ final class Page implements Service {
 		$this->calls     = $calls;
 		$this->reports   = $reports;
 		$this->cleanup   = $cleanup;
+		$this->runaway   = $runaway;
+		$this->forecast  = $forecast;
 	}
 
 	/**
@@ -117,9 +137,25 @@ final class Page implements Service {
 	public function register(): void {
 		add_action( 'admin_menu', array( $this, 'add_page' ) );
 		add_action( 'admin_notices', array( $this, 'notices' ) );
-		foreach ( array( 'kill', 'budgets', 'callers', 'rules', 'test_rules', 'prices', 'settings' ) as $action ) {
+		add_filter( 'plugin_action_links_' . plugin_basename( PLUGIN_FILE ), array( $this, 'action_links' ) );
+		foreach ( array( 'kill', 'budgets', 'callers', 'rules', 'prices', 'settings', 'runaway', 'steps' ) as $action ) {
 			add_action( 'admin_post_axle_ai_guard_' . $action, array( $this, 'handle_' . $action ) );
 		}
+	}
+
+	/**
+	 * Adds "Open AI Guard" to the plugin's row on the Plugins screen.
+	 *
+	 * @param mixed $links Row links.
+	 * @return array
+	 */
+	public function action_links( $links ): array {
+		$links = (array) $links;
+		if ( current_user_can( Plugin::capability() ) ) {
+			array_unshift( $links, '<a href="' . esc_url( self::url() ) . '">' . esc_html__( 'Open AI Guard', 'axle-ai-guard' ) . '</a>' );
+		}
+
+		return $links;
 	}
 
 	/**
@@ -149,6 +185,7 @@ final class Page implements Service {
 		$hook = add_management_page( __( 'Axle AI Guard', 'axle-ai-guard' ), __( 'AI Guard', 'axle-ai-guard' ), Plugin::capability(), self::SLUG, array( $this, 'render' ) );
 		if ( $hook ) {
 			add_action( "admin_print_styles-{$hook}", array( $this, 'enqueue' ) );
+			add_action( "load-{$hook}", array( $this, 'help' ) );
 		}
 	}
 
@@ -158,18 +195,27 @@ final class Page implements Service {
 	public function enqueue(): void {
 		AxleUi::enqueue();
 		wp_enqueue_style( 'axle-ai-guard-admin', plugins_url( 'assets/admin.css', PLUGIN_FILE ), array( AxleUi::HANDLE ), VERSION );
-		wp_enqueue_script( 'axle-ai-guard-admin', plugins_url( 'assets/admin.js', PLUGIN_FILE ), array( 'wp-hooks', 'wp-api-fetch', 'wp-i18n' ), VERSION, true );
+		wp_enqueue_script( 'axle-ai-guard-admin', plugins_url( 'assets/admin.js', PLUGIN_FILE ), array( 'wp-hooks', 'wp-api-fetch', 'wp-i18n', 'wp-a11y' ), VERSION, true );
 		wp_set_script_translations( 'axle-ai-guard-admin', 'axle-ai-guard' );
 
 		$data = array(
 			'currency' => $this->prices->currency(),
 			'tab'      => $this->tab(),
+			'screen'   => self::url(),
 		);
 		if ( 'overview' === $this->tab() ) {
 			$data['cards'] = $this->cards();
 		}
 		if ( 'calls' === $this->tab() ) {
-			$data['calls'] = array_map( array( Reports::class, 'present' ), $this->calls_query()['rows'] );
+			$data['calls'] = array_map(
+				static function ( array $row ): array {
+					$call         = Reports::present( $row );
+					$call['when'] = AxleUi::relative_time( (int) strtotime( (string) $row['started_at'] . ' UTC' ) );
+
+					return $call;
+				},
+				$this->calls_query()['rows']
+			);
 		}
 		wp_add_inline_script( 'axle-ai-guard-admin', 'window.axleAiGuardData = ' . wp_json_encode( $data ) . ';', 'before' );
 	}
@@ -207,6 +253,10 @@ final class Page implements Service {
 			);
 		}
 
+		foreach ( $this->runaway->open_events() as $event ) {
+			$this->render_runaway_notice( $event );
+		}
+
 		if ( $this->kill->global_on() ) {
 			printf(
 				'<div class="notice notice-error aag-notice aag-kill-notice"><p>%s <a href="%s">%s</a></p></div>',
@@ -215,6 +265,244 @@ final class Page implements Service {
 				esc_html__( 'Open AI Guard', 'axle-ai-guard' )
 			);
 		}
+	}
+
+	/**
+	 * A runaway event: what happened, the numbers, and what to do.
+	 *
+	 * @param array $event Event from Runaway::open_events().
+	 */
+	private function render_runaway_notice( array $event ): void {
+		$paused = ! empty( $event['paused'] );
+		echo '<div class="notice notice-warning aag-notice aag-runaway-notice axle-ui" data-event="' . esc_attr( (string) $event['id'] ) . '"><p><strong>' . esc_html(
+			sprintf(
+				/* translators: %s: caller key. */
+				__( '%s may be running away with AI calls.', 'axle-ai-guard' ),
+				(string) $event['caller']
+			)
+		) . '</strong> ';
+		echo esc_html(
+			sprintf(
+				/* translators: 1: calls in the last hour, 2: usual calls per hour, 3: how many times the usual number it allows. */
+				__( 'It made %1$s AI calls this hour. Its usual is about %2$s an hour, and the limit is %3$d times that.', 'axle-ai-guard' ),
+				number_format_i18n( (int) $event['calls'] ),
+				number_format_i18n( (int) $event['base_calls'] ),
+				(int) $event['multiple']
+			)
+		) . ' ';
+		echo esc_html( $paused ? __( 'Its AI calls are paused.', 'axle-ai-guard' ) : __( 'Its calls were not paused.', 'axle-ai-guard' ) ) . ' ';
+		echo wp_kses_post( AxleUi::relative_time( (int) $event['at'] ) ) . '</p>';
+		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="aag-inline-form">';
+		self::form_fields( 'runaway' );
+		echo '<input type="hidden" name="event" value="' . esc_attr( (string) $event['id'] ) . '">';
+		if ( $paused ) {
+			echo '<button type="submit" name="do" value="resume" class="button button-primary">' . esc_html__( 'Resume', 'axle-ai-guard' ) . '</button> ';
+			echo '<button type="submit" name="do" value="raise" class="button">' . esc_html__( 'Resume and raise the limit', 'axle-ai-guard' ) . '</button> ';
+		} else {
+			echo '<button type="submit" name="do" value="raise" class="button">' . esc_html__( 'Raise the limit', 'axle-ai-guard' ) . '</button> ';
+			echo '<button type="submit" name="do" value="dismiss" class="button">' . esc_html__( 'Dismiss', 'axle-ai-guard' ) . '</button>';
+		}
+		echo '</form></div>';
+	}
+
+	/**
+	 * Help tabs for the current tab.
+	 */
+	public function help(): void {
+		$tabs = array(
+			'overview' => array(
+				array(
+					'id'      => 'overview',
+					'title'   => __( 'Overview', 'axle-ai-guard' ),
+					'content' => '<p>' . esc_html__( 'AI Guard sees every AI call that plugins make on this site: what it cost, how many tokens it used and what data it carried. This page shows today and this month, and a switch to stop AI at once.', 'axle-ai-guard' ) . '</p>',
+				),
+				array(
+					'id'      => 'runaway',
+					'title'   => __( 'Runaway protection', 'axle-ai-guard' ),
+					'content' => '<p>' . esc_html__( 'AI Guard learns how many calls each plugin makes in a normal hour. When one makes many times more, it pauses that plugin only and tells you. Resume it when the cause is fixed, or raise its limit if the new volume is normal.', 'axle-ai-guard' ) . '</p>',
+				),
+				array(
+					'id'      => 'forecast',
+					'title'   => __( 'Forecast', 'axle-ai-guard' ),
+					'content' => '<p>' . esc_html__( 'The forecast takes the pace of the last 7 days and says when a monthly budget would run out. It only shows for sites and plugins that have a monthly budget.', 'axle-ai-guard' ) . '</p>',
+				),
+			),
+			'calls'    => array(
+				array(
+					'id'      => 'overview',
+					'title'   => __( 'Overview', 'axle-ai-guard' ),
+					'content' => '<p>' . esc_html__( 'Every AI call the guard saw, newest first. Use the filters to narrow the list, and open Details to see tokens, cost and what the data rules found.', 'axle-ai-guard' ) . '</p>',
+				),
+			),
+			'budgets'  => array(
+				array(
+					'id'      => 'overview',
+					'title'   => __( 'Overview', 'axle-ai-guard' ),
+					'content' => '<p>' . esc_html__( 'Set how much AI each plugin and the whole site may use. A budget blocks calls once it is used up.', 'axle-ai-guard' ) . '</p>',
+				),
+				array(
+					'id'      => 'callers',
+					'title'   => __( 'Approving plugins', 'axle-ai-guard' ),
+					'content' => '<p>' . esc_html__( 'A plugin that is denied cannot make AI calls. Change how new plugins are treated under Settings.', 'axle-ai-guard' ) . '</p>',
+				),
+			),
+			'rules'    => array(
+				array(
+					'id'      => 'overview',
+					'title'   => __( 'Overview', 'axle-ai-guard' ),
+					'content' => '<p>' . esc_html__( 'Data rules look at what a call sends. Log records a finding, redact replaces it before the request leaves, and block stops the call.', 'axle-ai-guard' ) . '</p>',
+				),
+				array(
+					'id'      => 'try',
+					'title'   => __( 'Try your rules', 'axle-ai-guard' ),
+					'content' => '<p>' . esc_html__( 'Paste text, pick a plugin and where the call comes from, and see what each rule would do. The text is never stored and never sent anywhere.', 'axle-ai-guard' ) . '</p>',
+				),
+			),
+			'prices'   => array(
+				array(
+					'id'      => 'overview',
+					'title'   => __( 'Overview', 'axle-ai-guard' ),
+					'content' => '<p>' . esc_html__( 'The price table turns tokens into estimated costs. Edit a price when your provider changes it, then recalculate past costs.', 'axle-ai-guard' ) . '</p>',
+				),
+				array(
+					'id'      => 'import',
+					'title'   => __( 'Import and export', 'axle-ai-guard' ),
+					'content' => '<p>' . esc_html__( 'Export the table as JSON to keep a copy or move it to another site. Importing adds to the table and overrides prices with the same key. You can undo the last change.', 'axle-ai-guard' ) . '</p>',
+				),
+			),
+			'settings' => array(
+				array(
+					'id'      => 'overview',
+					'title'   => __( 'Overview', 'axle-ai-guard' ),
+					'content' => '<p>' . esc_html__( 'How new plugins are handled, how long data is kept, where alerts go and how runaway protection behaves.', 'axle-ai-guard' ) . '</p>',
+				),
+			),
+		);
+
+		AxleUi::help_tabs( $tabs[ $this->tab() ] );
+	}
+
+	/**
+	 * Steps of the Get started card, with their done state read from real data.
+	 *
+	 * @return array<int, array{title: string, text: string, done: bool, url: string, label: string}>
+	 */
+	private function steps(): array {
+		$budget = (bool) array_filter( $this->policy->budget( 'global' ) );
+		foreach ( array_keys( $this->settings->policies() ) as $subject ) {
+			$budget = $budget || (bool) array_filter( $this->policy->budget( $subject ) );
+		}
+
+		return array(
+			array(
+				'title' => __( 'See the first AI call', 'axle-ai-guard' ),
+				'text'  => __( 'Plugins show up as soon as they make a call.', 'axle-ai-guard' ),
+				'done'  => (bool) $this->settings->callers(),
+				'url'   => self::url( 'calls' ),
+				'label' => __( 'Open the calls', 'axle-ai-guard' ),
+			),
+			array(
+				'title' => __( 'Set a monthly budget', 'axle-ai-guard' ),
+				'text'  => __( 'A budget stops spending, and powers the forecast.', 'axle-ai-guard' ),
+				'done'  => $budget,
+				'url'   => self::url( 'budgets' ),
+				'label' => __( 'Set a budget', 'axle-ai-guard' ),
+			),
+			array(
+				'title' => __( 'Choose what happens to personal data', 'axle-ai-guard' ),
+				'text'  => __( 'Redact or block emails, keys and your own patterns.', 'axle-ai-guard' ),
+				'done'  => false !== get_option( 'axle_ai_guard_rules', false ),
+				'url'   => self::url( 'rules' ),
+				'label' => __( 'Review the rules', 'axle-ai-guard' ),
+			),
+		);
+	}
+
+	/**
+	 * The Get started card, until every step is done or the user dismisses it.
+	 */
+	private function render_steps(): void {
+		if ( get_user_meta( get_current_user_id(), 'axle_ai_guard_steps_dismissed', true ) ) {
+			return;
+		}
+		$steps = $this->steps();
+		if ( ! array_filter(
+			$steps,
+			static function ( array $step ): bool {
+				return ! $step['done'];
+			}
+		) ) {
+			return;
+		}
+
+		echo '<section class="axle-card aag-steps" aria-labelledby="aag-steps-title"><div class="axle-card__head"><h2 class="axle-card__title" id="aag-steps-title">' . esc_html__( 'Get started', 'axle-ai-guard' ) . '</h2>';
+		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">';
+		self::form_fields( 'steps' );
+		echo '<button type="submit" class="button-link">' . esc_html__( 'Dismiss', 'axle-ai-guard' ) . '</button></form></div><ol class="axle-steps">';
+		foreach ( $steps as $step ) {
+			echo '<li class="axle-step"><div class="axle-step__body"><strong class="axle-step__title">' . esc_html( $step['title'] ) . '</strong><p>' . esc_html( $step['text'] ) . '</p></div>';
+			if ( $step['done'] ) {
+				echo '<span class="axle-badge axle-badge--good">' . esc_html__( 'Done', 'axle-ai-guard' ) . '</span>';
+			} else {
+				echo '<a class="button" href="' . esc_url( $step['url'] ) . '">' . esc_html( $step['label'] ) . '</a>';
+			}
+			echo '</li>';
+		}
+		echo '</ol></section>';
+	}
+
+	/**
+	 * Runaway protection and the month-end forecast.
+	 */
+	private function render_runaway(): void {
+		echo '<section class="axle-card aag-runaway" aria-labelledby="aag-runaway-title"><h2 class="axle-card__title" id="aag-runaway-title">' . esc_html__( 'Runaway protection and forecast', 'axle-ai-guard' ) . '</h2>';
+		$modes = array(
+			'off'   => __( 'Off', 'axle-ai-guard' ),
+			'alert' => __( 'Alert only', 'axle-ai-guard' ),
+			'pause' => __( 'Pause', 'axle-ai-guard' ),
+		);
+		$mode  = $this->runaway->mode();
+		echo '<p><span class="axle-badge axle-badge--' . ( 'off' === $mode ? 'neutral' : 'good' ) . '">' . esc_html( $modes[ $mode ] ) . '</span> ';
+		echo esc_html(
+			'pause' === $mode
+				? __( 'A plugin that makes far more calls than usual is paused, and you get an alert.', 'axle-ai-guard' )
+				: ( 'alert' === $mode ? __( 'A plugin that makes far more calls than usual triggers an alert. Nothing is paused.', 'axle-ai-guard' ) : __( 'Nothing watches for a plugin calling AI in a loop.', 'axle-ai-guard' ) )
+		) . ' <a href="' . esc_url( self::url( 'settings' ) ) . '">' . esc_html__( 'Change the mode', 'axle-ai-guard' ) . '</a></p>';
+
+		$forecasts = $this->forecast->all();
+		if ( ! $forecasts ) {
+			echo '<div class="axle-empty aag-empty"><p>' . esc_html__( 'No forecast yet. Set a monthly budget for the site or a plugin and AI Guard says when it would run out at the pace of the last 7 days.', 'axle-ai-guard' ) . '</p><a class="button" href="' . esc_url( self::url( 'budgets' ) ) . '">' . esc_html__( 'Set a monthly budget', 'axle-ai-guard' ) . '</a></div></section>';
+			return;
+		}
+
+		echo '<div class="axle-scroll" tabindex="0" role="region" aria-label="' . esc_attr__( 'Forecast per budget', 'axle-ai-guard' ) . '"><table class="widefat striped aag-table aag-forecast"><thead><tr>';
+		foreach ( array( __( 'Budget', 'axle-ai-guard' ), __( 'Used this month', 'axle-ai-guard' ), __( 'Pace per day', 'axle-ai-guard' ), __( 'Forecast', 'axle-ai-guard' ) ) as $head ) {
+			echo '<th scope="col">' . esc_html( $head ) . '</th>';
+		}
+		echo '</tr></thead><tbody>';
+		foreach ( $forecasts as $forecast ) {
+			$money = 'cost' === $forecast['unit'];
+			$fmt   = function ( $value ) use ( $money ): string {
+				return $money ? $this->money( (int) round( $value ) ) : number_format_i18n( (int) round( $value ) );
+			};
+			if ( 'reached' === $forecast['state'] ) {
+				$text = '<span class="axle-badge axle-badge--error">' . esc_html__( 'Used up', 'axle-ai-guard' ) . '</span> ' . esc_html__( 'The monthly budget is used up. Calls are blocked until next month.', 'axle-ai-guard' );
+			} elseif ( $forecast['crosses'] ) {
+				$text = '<span class="axle-badge axle-badge--warning">' . esc_html__( 'Runs out early', 'axle-ai-guard' ) . '</span> ' . sprintf(
+					/* translators: 1: time until the budget runs out, 2: day of the month. */
+					esc_html__( 'At this pace the monthly budget runs out %1$s, on the %2$s.', 'axle-ai-guard' ),
+					AxleUi::relative_time( (int) $forecast['runs_out'] ),
+					esc_html( wp_date( 'jS', (int) $forecast['runs_out'] ) )
+				);
+			} elseif ( 'quiet' === $forecast['state'] ) {
+				$text = '<span class="axle-badge axle-badge--neutral">' . esc_html__( 'Quiet', 'axle-ai-guard' ) . '</span> ' . esc_html__( 'No use in the last 7 days.', 'axle-ai-guard' );
+			} else {
+				$text = '<span class="axle-badge axle-badge--good">' . esc_html__( 'On track', 'axle-ai-guard' ) . '</span> ' . esc_html__( 'The monthly budget lasts to the end of the month.', 'axle-ai-guard' );
+			}
+			echo '<tr><th scope="row"><code>' . esc_html( 'global' === $forecast['subject'] ? __( 'Whole site', 'axle-ai-guard' ) : substr( $forecast['subject'], 7 ) ) . '</code></th>';
+			echo '<td>' . esc_html( $fmt( $forecast['used'] ) . ' / ' . $fmt( $forecast['budget'] ) ) . '</td><td>' . esc_html( $fmt( $forecast['per_day'] ) ) . '</td><td>' . wp_kses_post( $text ) . '</td></tr>';
+		}
+		echo '</tbody></table></div></section>';
 	}
 
 	/**
@@ -277,25 +565,131 @@ final class Page implements Service {
 	}
 
 	/**
-	 * The message after a form was handled.
+	 * The message after a form was handled, with Undo when there is one.
 	 */
 	private function done_notice(): void {
-		$done = isset( $_GET['done'] ) ? sanitize_key( wp_unslash( $_GET['done'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Display only.
-		$map  = array(
-			'kill_on'      => __( 'Switched off. Calls in that scope are blocked now.', 'axle-ai-guard' ),
-			'kill_off'     => __( 'Switched back on.', 'axle-ai-guard' ),
-			'kill_same'    => __( 'Nothing changed: the switch was already in that state.', 'axle-ai-guard' ),
-			'budgets'      => __( 'Budgets and limits saved.', 'axle-ai-guard' ),
-			'callers'      => __( 'Caller updated.', 'axle-ai-guard' ),
-			'rules'        => __( 'Data rules saved.', 'axle-ai-guard' ),
-			'prices'       => __( 'Prices saved.', 'axle-ai-guard' ),
-			'prices_reset' => __( 'Prices are back to the shipped table.', 'axle-ai-guard' ),
-			'recalc'       => __( 'Costs of the last 30 days were recalculated with the current prices.', 'axle-ai-guard' ),
-			'settings'     => __( 'Settings saved.', 'axle-ai-guard' ),
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- Display only; Undo is a form with its own nonce.
+		$done    = isset( $_GET['done'] ) ? sanitize_key( wp_unslash( $_GET['done'] ) ) : '';
+		$scope   = isset( $_GET['k_scope'] ) ? sanitize_key( wp_unslash( $_GET['k_scope'] ) ) : '';
+		$subject = isset( $_GET['k_subject'] ) ? sanitize_text_field( wp_unslash( $_GET['k_subject'] ) ) : '';
+		$caller  = isset( $_GET['caller'] ) ? sanitize_text_field( wp_unslash( $_GET['caller'] ) ) : '';
+		$prev    = isset( $_GET['prev'] ) ? sanitize_key( wp_unslash( $_GET['prev'] ) ) : '';
+		$rows    = isset( $_GET['n'] ) ? absint( $_GET['n'] ) : 0;
+		$changed = isset( $_GET['c'] ) ? absint( $_GET['c'] ) : 0;
+		$delta   = isset( $_GET['d'] ) ? (int) $_GET['d'] : 0;
+		$next    = isset( $_GET['next'] ) ? absint( $_GET['next'] ) : 0;
+		// phpcs:enable
+
+		$map = array(
+			'kill_on'              => __( 'Switched off. Calls in that scope are blocked now.', 'axle-ai-guard' ),
+			'kill_off'             => __( 'Switched back on.', 'axle-ai-guard' ),
+			'kill_same'            => __( 'Nothing changed: the switch was already in that state.', 'axle-ai-guard' ),
+			'budgets'              => __( 'Budgets and limits saved.', 'axle-ai-guard' ),
+			'callers'              => __( 'Caller updated.', 'axle-ai-guard' ),
+			'rules'                => __( 'Data rules saved.', 'axle-ai-guard' ),
+			'prices'               => __( 'Prices saved.', 'axle-ai-guard' ),
+			'prices_reset'         => __( 'Prices are back to the shipped table.', 'axle-ai-guard' ),
+			'prices_undone'        => __( 'The last price change was undone.', 'axle-ai-guard' ),
+			'prices_imported'      => __( 'Prices imported. Models with the same key now have the imported price.', 'axle-ai-guard' ),
+			'recalc'               => __( 'Costs of the last 30 days were recalculated with the current prices.', 'axle-ai-guard' ),
+			'settings'             => __( 'Settings saved.', 'axle-ai-guard' ),
+			'steps'                => __( 'The Get started card is hidden.', 'axle-ai-guard' ),
+			'prices_import_failed' => '',
+			'runaway_resumed'      => __( 'AI calls resumed.', 'axle-ai-guard' ),
+			'runaway_raised'       => __( 'AI calls resumed, and the limit for this plugin is higher now.', 'axle-ai-guard' ),
+			'runaway_closed'       => __( 'Warning dismissed.', 'axle-ai-guard' ),
+			'runaway_same'         => __( 'Nothing changed: that warning was already dealt with.', 'axle-ai-guard' ),
 		);
-		if ( isset( $map[ $done ] ) ) {
-			printf( '<div class="notice notice-success is-dismissible"><p>%s</p></div>', esc_html( $map[ $done ] ) );
+
+		$tone = 'success';
+		$text = $map[ $done ] ?? '';
+		if ( 'recalc_preview' === $done ) {
+			$tone = 'info';
+			$text = sprintf(
+				/* translators: 1: calls that would change, 2: calls checked, 3: change in cost. */
+				__( 'Preview: recalculating would change %1$s of %2$s calls, by %3$s in total. Nothing was changed.', 'axle-ai-guard' ),
+				number_format_i18n( $changed ),
+				number_format_i18n( $rows ),
+				$this->money( abs( $delta ) )
+			);
 		}
+		if ( 'recalc' === $done && $next > 0 ) {
+			$tone = 'warning';
+			$text = sprintf(
+				/* translators: %s: calls recalculated so far. */
+				__( 'Recalculated %s calls so far. There are more: continue below.', 'axle-ai-guard' ),
+				number_format_i18n( $rows )
+			);
+		}
+		if ( 'prices_import_failed' === $done ) {
+			$tone = 'error';
+			$text = (string) get_transient( 'axle_ai_guard_import_error_' . get_current_user_id() );
+			$text = '' !== $text ? $text : __( 'The import failed. Check the JSON and try again.', 'axle-ai-guard' );
+		}
+		if ( '' === $text ) {
+			return;
+		}
+
+		echo '<div class="notice notice-' . esc_attr( $tone ) . ' is-dismissible aag-done" role="status"><p>' . esc_html( $text );
+
+		$undo = array();
+		if ( 'kill_on' === $done && '' !== $scope ) {
+			$undo = array(
+				'action' => 'kill',
+				'fields' => array(
+					'scope'   => $scope,
+					'subject' => $subject,
+					'on'      => '0',
+				),
+				'label'  => __( 'Undo: switch back on', 'axle-ai-guard' ),
+			);
+		} elseif ( 'kill_off' === $done && '' !== $scope ) {
+			$undo = array(
+				'action' => 'kill',
+				'fields' => array(
+					'scope'   => $scope,
+					'subject' => $subject,
+					'on'      => '1',
+				),
+				'label'  => __( 'Undo: switch off again', 'axle-ai-guard' ),
+			);
+		} elseif ( 'callers' === $done && '' !== $caller && in_array( $prev, array( 'approved', 'denied' ), true ) ) {
+			$undo = array(
+				'action' => 'callers',
+				'fields' => array(
+					'caller' => $caller,
+					'status' => $prev,
+				),
+				'label'  => __( 'Undo', 'axle-ai-guard' ),
+			);
+		} elseif ( in_array( $done, array( 'prices', 'prices_reset', 'prices_imported' ), true ) && $this->prices->can_undo() ) {
+			$undo = array(
+				'action' => 'prices',
+				'fields' => array( 'do' => 'undo' ),
+				'label'  => __( 'Undo', 'axle-ai-guard' ),
+			);
+		} elseif ( in_array( $done, array( 'runaway_resumed', 'runaway_raised' ), true ) && '' !== $caller ) {
+			$undo = array(
+				'action' => 'kill',
+				'fields' => array(
+					'scope'   => 'plugin',
+					'subject' => $caller,
+					'on'      => '1',
+					'reason'  => __( 'Paused again after a resume.', 'axle-ai-guard' ),
+				),
+				'label'  => __( 'Undo: pause again', 'axle-ai-guard' ),
+			);
+		}
+
+		if ( $undo ) {
+			echo ' <form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="aag-inline-form">';
+			self::form_fields( $undo['action'] );
+			foreach ( $undo['fields'] as $name => $value ) {
+				echo '<input type="hidden" name="' . esc_attr( $name ) . '" value="' . esc_attr( (string) $value ) . '">';
+			}
+			echo '<button type="submit" class="button-link">' . esc_html( $undo['label'] ) . '</button></form>';
+		}
+		echo '</p></div>';
 	}
 
 	/**
@@ -356,7 +750,22 @@ final class Page implements Service {
 	 * @param string $css     Button class.
 	 */
 	private function kill_button( string $scope, string $subject, bool $on, string $label, string $css = 'button' ): void {
-		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="aag-kill-form">';
+		$confirm = '';
+		if ( $on ) {
+			$confirm = sprintf(
+				' data-aag-confirm="1" data-confirm-title="%1$s" data-confirm-body="%2$s" data-confirm-yes="%3$s"',
+				esc_attr(
+					sprintf(
+						/* translators: %s: what is switched off, such as the caller x. */
+						__( 'Switch AI off for %s?', 'axle-ai-guard' ),
+						KillSwitch::describe( $scope, $subject )
+					)
+				),
+				esc_attr__( 'Its AI calls are blocked at once. Nothing is deleted, and you can turn it back on here. The notice that follows has an Undo link.', 'axle-ai-guard' ),
+				esc_attr__( 'Switch off', 'axle-ai-guard' )
+			);
+		}
+		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="aag-kill-form"' . $confirm . '>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Built from escaped parts above.
 		self::form_fields( 'kill' );
 		printf(
 			'<input type="hidden" name="scope" value="%1$s"><input type="hidden" name="subject" value="%2$s"><input type="hidden" name="on" value="%3$s"><button type="submit" class="%4$s aag-kill-toggle" data-scope="%1$s" data-subject="%2$s" data-on="%3$s">%5$s</button>',
@@ -373,6 +782,7 @@ final class Page implements Service {
 	 * Overview tab.
 	 */
 	private function render_overview(): void {
+		$this->render_steps();
 		// The global switch.
 		echo '<section class="axle-card' . ( $this->kill->global_on() ? '' : ' axle-card--danger' ) . ' aag-global" aria-labelledby="aag-global-title">';
 		echo '<h2 class="axle-card__title" id="aag-global-title">' . esc_html__( 'Kill switch', 'axle-ai-guard' ) . '</h2>';
@@ -387,7 +797,7 @@ final class Page implements Service {
 		} else {
 			echo '<p class="aag-status"><span class="axle-badge axle-badge--good">' . esc_html__( 'Allowed', 'axle-ai-guard' ) . '</span> ' . esc_html__( 'AI calls are allowed, within your budgets and data rules.', 'axle-ai-guard' ) . '</p>';
 			echo '<p>' . esc_html__( 'Switching AI off blocks every AI call on this site until you turn it back on. Nothing is deleted, and you can undo it here at any time.', 'axle-ai-guard' ) . '</p>';
-			echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="aag-inline-form">';
+			echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="aag-inline-form" data-aag-confirm="1" data-confirm-title="' . esc_attr__( 'Switch all AI off?', 'axle-ai-guard' ) . '" data-confirm-body="' . esc_attr__( 'Every AI call on this site is blocked at once, from every plugin. Nothing is deleted. You can turn it back on from this screen, and the notice that follows has an Undo link.', 'axle-ai-guard' ) . '" data-confirm-yes="' . esc_attr__( 'Switch all AI off', 'axle-ai-guard' ) . '">';
 			self::form_fields( 'kill' );
 			echo '<input type="hidden" name="scope" value="global"><input type="hidden" name="on" value="1">';
 			echo '<label for="aag-kill-reason">' . esc_html__( 'Reason', 'axle-ai-guard' ) . '</label> ';
@@ -407,6 +817,7 @@ final class Page implements Service {
 			)
 		) . '</p></section>';
 
+		$this->render_runaway();
 		$this->render_callers_table();
 		$this->render_breakdown();
 		$this->render_switches();
@@ -434,8 +845,12 @@ final class Page implements Service {
 			echo '<div class="axle-empty aag-empty"><p>' . esc_html__( 'No AI calls yet. Plugins show up here after their first call, with their usage and a switch to turn them off.', 'axle-ai-guard' ) . '</p></div></section>';
 			return;
 		}
-		echo '<table class="widefat striped aag-table aag-callers"><thead><tr>';
-		foreach ( array( __( 'Caller', 'axle-ai-guard' ), __( 'Calls', 'axle-ai-guard' ), __( 'Tokens', 'axle-ai-guard' ), __( 'Cost', 'axle-ai-guard' ), __( 'Monthly budget', 'axle-ai-guard' ), __( 'Last call', 'axle-ai-guard' ), __( 'Status', 'axle-ai-guard' ), __( 'Kill switch', 'axle-ai-guard' ) ) as $head ) {
+		echo '<div class="axle-scroll" tabindex="0" role="region" aria-label="' . esc_attr__( 'Plugins making AI calls', 'axle-ai-guard' ) . '"><table class="widefat striped aag-table aag-callers"><thead><tr>';
+		$hourly = array();
+		foreach ( $this->runaway->callers() as $entry ) {
+			$hourly[ (string) $entry['caller'] ] = $entry;
+		}
+		foreach ( array( __( 'Caller', 'axle-ai-guard' ), __( 'Calls', 'axle-ai-guard' ), __( 'This hour', 'axle-ai-guard' ), __( 'Tokens', 'axle-ai-guard' ), __( 'Cost', 'axle-ai-guard' ), __( 'Monthly budget', 'axle-ai-guard' ), __( 'Last call', 'axle-ai-guard' ), __( 'Status', 'axle-ai-guard' ), __( 'Kill switch', 'axle-ai-guard' ) ) as $head ) {
 			echo '<th scope="col">' . esc_html( $head ) . '</th>';
 		}
 		echo '</tr></thead><tbody>';
@@ -453,18 +868,27 @@ final class Page implements Service {
 			echo '<tr data-caller="' . esc_attr( $name ) . '">';
 			echo '<th scope="row"><code>' . esc_html( $name ) . '</code></th>';
 			echo '<td>' . esc_html( number_format_i18n( $row['calls'] ) ) . ( $row['blocked'] ? ' <span class="aag-muted">' . esc_html( sprintf( /* translators: %s: number of blocked calls. */ __( '(%s blocked)', 'axle-ai-guard' ), number_format_i18n( $row['blocked'] ) ) ) . '</span>' : '' ) . '</td>';
+			$hour = $hourly[ $name ] ?? null;
+			echo '<td>' . ( $hour ? esc_html(
+				sprintf(
+					/* translators: 1: calls this hour, 2: the limit per hour. */
+					__( '%1$s of %2$s', 'axle-ai-guard' ),
+					number_format_i18n( (int) $hour['calls_hour'] ),
+					number_format_i18n( (int) $hour['calls_limit'] )
+				)
+			) : '-' ) . '</td>';
 			echo '<td>' . esc_html( number_format_i18n( $row['tokens'] ) ) . '</td>';
 			echo '<td>' . esc_html( $this->money( $row['cost'] ) ) . '</td>';
 			echo '<td>';
 			$this->budget_bar( 'plugin:' . $name );
 			echo '</td>';
-			echo '<td>' . esc_html( isset( $last[ $name ] ) ? self::when( $last[ $name ] ) : '-' ) . '</td>';
+			echo '<td>' . wp_kses_post( isset( $last[ $name ] ) ? self::when( $last[ $name ] ) : AxleUi::relative_time( 0, '-' ) ) . '</td>';
 			echo '<td>' . ( $killed ? '<span class="axle-badge axle-badge--error">' . esc_html__( 'Switched off', 'axle-ai-guard' ) . '</span>' : self::status_badge( $status ) ) . '</td>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped in status_badge().
 			echo '<td>';
 			$this->kill_button( 'plugin', $name, ! $killed, $killed ? __( 'Turn on', 'axle-ai-guard' ) : __( 'Switch off', 'axle-ai-guard' ) );
 			echo '</td></tr>';
 		}
-		echo '</tbody></table></section>';
+		echo '</tbody></table></div></section>';
 	}
 
 	/**
@@ -499,15 +923,13 @@ final class Page implements Service {
 	}
 
 	/**
-	 * A UTC datetime as local time.
+	 * A UTC datetime as relative time. Returns escaped HTML.
 	 *
 	 * @param string $utc UTC datetime.
 	 * @return string
 	 */
 	private static function when( string $utc ): string {
-		$time = strtotime( $utc . ' UTC' );
-
-		return $time ? wp_date( 'Y-m-d H:i', $time ) : '-';
+		return AxleUi::relative_time( (int) strtotime( $utc . ' UTC' ), '-' );
 	}
 
 	/**
@@ -535,13 +957,14 @@ final class Page implements Service {
 		$word = $full ? '<span class="axle-badge axle-badge--error">' . esc_html__( 'Limit reached', 'axle-ai-guard' ) . '</span>' : ( $soft ? '<span class="axle-badge axle-badge--warning">' . esc_html__( 'Near the limit', 'axle-ai-guard' ) . '</span>' : '' );
 
 		printf(
-			'<span class="aag-bar%1$s"><progress max="100" value="%2$d" aria-label="%3$s"></progress> <span>%4$s</span> %5$s</span>',
-			$full ? ' aag-bar-full' : ( $soft ? ' aag-bar-soft' : '' ),
+			'<span class="aag-bar %6$s"><span class="axle-progress axle-progress--%1$s" role="progressbar" aria-valuenow="%2$d" aria-valuemin="0" aria-valuemax="100" aria-label="%3$s"><span class="axle-progress__bar" style="width:%2$d%%"></span></span> <span>%4$s</span> %5$s</span>',
+			$full ? 'error' : ( $soft ? 'warning' : 'good' ),
 			(int) $pct,
 			/* translators: 1: subject, 2: percentage. */
 			esc_attr( sprintf( __( 'Budget of %1$s: %2$d%% used', 'axle-ai-guard' ), $subject, $pct ) ),
 			esc_html( $text ),
-			$word // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Built from escaped strings above.
+			$word, // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Built from escaped strings above.
+			$full ? 'aag-bar-full' : ( $soft ? 'aag-bar-soft' : '' )
 		);
 	}
 
@@ -557,7 +980,7 @@ final class Page implements Service {
 			return;
 		}
 
-		echo '<table class="widefat striped aag-table aag-models"><thead><tr><th scope="col">' . esc_html__( 'Provider', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Calls', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Tokens', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Cost', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Kill switch', 'axle-ai-guard' ) . '</th></tr></thead><tbody>';
+		echo '<div class="axle-scroll" tabindex="0" role="region" aria-label="' . esc_attr__( 'Providers and models', 'axle-ai-guard' ) . '"><table class="widefat striped aag-table aag-models"><thead><tr><th scope="col">' . esc_html__( 'Provider', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Calls', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Tokens', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Cost', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Kill switch', 'axle-ai-guard' ) . '</th></tr></thead><tbody>';
 		foreach ( $providers as $row ) {
 			$killed = $this->kill->is_on( 'provider', $row['name'] );
 			echo '<tr><th scope="row"><code>' . esc_html( $row['name'] ) . '</code></th><td>' . esc_html( number_format_i18n( $row['calls'] ) ) . '</td><td>' . esc_html( number_format_i18n( $row['tokens'] ) ) . '</td><td>' . esc_html( $this->money( $row['cost'] ) ) . '</td><td>';
@@ -570,7 +993,7 @@ final class Page implements Service {
 		foreach ( $rows as $row ) {
 			echo '<tr><th scope="row"><code>' . esc_html( '' !== (string) $row['name'] ? (string) $row['name'] : '-' ) . '</code></th><td>' . esc_html( number_format_i18n( (int) $row['calls'] ) ) . '</td><td>' . esc_html( number_format_i18n( (int) $row['tokens'] ) ) . '</td><td>' . esc_html( $this->money( (int) $row['cost'] ) ) . '</td></tr>';
 		}
-		echo '</tbody></table></section>';
+		echo '</tbody></table></div></section>';
 	}
 
 	/**
@@ -589,9 +1012,9 @@ final class Page implements Service {
 				echo '<span class="axle-muted">' . esc_html(
 					trim(
 						( '' !== $entry['reason'] ? $entry['reason'] . '. ' : '' ) .
-						( $entry['at'] ? sprintf( /* translators: 1: date, 2: who. */ __( 'Since %1$s, by %2$s.', 'axle-ai-guard' ), wp_date( 'Y-m-d H:i', $entry['at'] ), $user ? $user->display_name : __( 'AI Guard', 'axle-ai-guard' ) ) : '' )
+						( $entry['at'] ? sprintf( /* translators: %s: who. */ __( 'By %s.', 'axle-ai-guard' ), $user ? $user->display_name : __( 'AI Guard', 'axle-ai-guard' ) ) : '' )
 					)
-				) . '</span> ';
+				) . ' ' . wp_kses_post( $entry['at'] ? AxleUi::relative_time( (int) $entry['at'] ) : '' ) . '</span> ';
 				if ( 'site' === $entry['source'] ) {
 					$this->kill_button( $entry['scope'], $entry['subject'], false, __( 'Turn on', 'axle-ai-guard' ) );
 				}
@@ -600,7 +1023,7 @@ final class Page implements Service {
 			echo '</ul>';
 		}
 
-		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="aag-inline-form aag-context-kill">';
+		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="aag-inline-form aag-context-kill" data-aag-confirm="1" data-confirm-title="' . esc_attr__( 'Switch AI off in this context?', 'axle-ai-guard' ) . '" data-confirm-body="' . esc_attr__( 'Calls from that context are blocked at once. Nothing is deleted, and you can turn it back on here.', 'axle-ai-guard' ) . '" data-confirm-yes="' . esc_attr__( 'Switch off', 'axle-ai-guard' ) . '">';
 		self::form_fields( 'kill' );
 		echo '<input type="hidden" name="scope" value="context"><input type="hidden" name="on" value="1">';
 		echo '<label for="aag-kill-context">' . esc_html__( 'Switch AI off in one context', 'axle-ai-guard' ) . '</label> <select id="aag-kill-context" name="subject">';
@@ -644,11 +1067,11 @@ final class Page implements Service {
 			echo '<div class="axle-empty aag-empty"><p>' . esc_html__( 'No calls were blocked. A call is blocked by a budget, a data rule or a kill switch, and shows up here.', 'axle-ai-guard' ) . '</p></div></section>';
 			return;
 		}
-		echo '<table class="widefat striped aag-table aag-blocks"><thead><tr><th scope="col">' . esc_html__( 'When', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Caller', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Rule', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Context', 'axle-ai-guard' ) . '</th></tr></thead><tbody>';
+		echo '<div class="axle-scroll" tabindex="0" role="region" aria-label="' . esc_attr__( 'Recent blocks', 'axle-ai-guard' ) . '"><table class="widefat striped aag-table aag-blocks"><thead><tr><th scope="col">' . esc_html__( 'When', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Caller', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Rule', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Context', 'axle-ai-guard' ) . '</th></tr></thead><tbody>';
 		foreach ( $rows as $row ) {
-			echo '<tr><td>' . esc_html( self::when( (string) $row['started_at'] ) ) . '</td><td><code>' . esc_html( (string) $row['caller_slug'] ) . '</code></td><td><code>' . esc_html( (string) $row['block_rule'] ) . '</code></td><td>' . esc_html( (string) $row['context'] ) . '</td></tr>';
+			echo '<tr><td>' . wp_kses_post( self::when( (string) $row['started_at'] ) ) . '</td><td><code>' . esc_html( (string) $row['caller_slug'] ) . '</code></td><td><code>' . esc_html( (string) $row['block_rule'] ) . '</code></td><td>' . esc_html( (string) $row['context'] ) . '</td></tr>';
 		}
-		echo '</tbody></table>';
+		echo '</tbody></table></div>';
 		echo '<p><a href="' . esc_url( self::url( 'calls', array( 'status' => 'blocked' ) ) ) . '">' . esc_html__( 'All blocked calls', 'axle-ai-guard' ) . '</a></p></section>';
 	}
 
@@ -701,7 +1124,7 @@ final class Page implements Service {
 		$filters = $this->call_filters();
 		$result  = $this->calls_query();
 
-		echo '<form method="get" class="aag-filters" aria-label="' . esc_attr__( 'Filter calls', 'axle-ai-guard' ) . '">';
+		echo '<form method="get" class="aag-filters axle-toolbar" aria-label="' . esc_attr__( 'Filter calls', 'axle-ai-guard' ) . '">';
 		echo '<input type="hidden" name="page" value="' . esc_attr( self::SLUG ) . '"><input type="hidden" name="tab" value="calls">';
 		$selects = array(
 			'status'   => array( __( 'Status', 'axle-ai-guard' ), array_combine( Calls::STATUSES, Calls::STATUSES ), $filters['status'] ),
@@ -722,7 +1145,7 @@ final class Page implements Service {
 		echo '<button type="submit" class="button">' . esc_html__( 'Filter', 'axle-ai-guard' ) . '</button></form>';
 
 		echo '<p class="aag-count axle-muted">' . esc_html( sprintf( /* translators: %s: number of calls. */ _n( '%s call', '%s calls', $result['total'], 'axle-ai-guard' ), number_format_i18n( $result['total'] ) ) ) . '</p>';
-		echo '<div class="axle-card aag-calls" data-aag-calls><p class="axle-muted"><span class="spinner is-active aag-spinner"></span> ' . esc_html__( 'Loading calls', 'axle-ai-guard' ) . '</p></div>';
+		echo '<div class="axle-card aag-calls" data-aag-calls aria-busy="true"><p class="axle-muted"><span class="spinner is-active aag-spinner"></span> ' . esc_html__( 'Loading calls', 'axle-ai-guard' ) . '</p></div>';
 
 		$pages = (int) ceil( $result['total'] / 50 );
 		if ( $pages > 1 ) {
@@ -900,22 +1323,22 @@ final class Page implements Service {
 			echo '<div class="axle-empty aag-empty"><p>' . esc_html__( 'No plugin has made an AI call yet. Plugins show up here after their first call, where you can approve or deny them.', 'axle-ai-guard' ) . '</p></div></section>';
 			return;
 		}
-		echo '<table class="widefat striped aag-table aag-approvals"><thead><tr><th scope="col">' . esc_html__( 'Caller', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Type', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'First seen in', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Status', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Change', 'axle-ai-guard' ) . '</th></tr></thead><tbody>';
+		echo '<div class="axle-scroll" tabindex="0" role="region" aria-label="' . esc_attr__( 'Callers', 'axle-ai-guard' ) . '"><table class="widefat striped aag-table aag-approvals"><thead><tr><th scope="col">' . esc_html__( 'Caller', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Type', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'First seen in', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Status', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Change', 'axle-ai-guard' ) . '</th></tr></thead><tbody>';
 		foreach ( $callers as $key => $caller ) {
 			$status = (string) ( $caller['status'] ?? 'approved' );
 			echo '<tr><th scope="row"><code>' . esc_html( (string) $key ) . '</code></th><td>' . esc_html( (string) ( $caller['type'] ?? '' ) ) . '</td><td><code>' . esc_html( (string) ( $caller['file'] ?? '' ) ) . '</code></td><td>' . self::status_badge( $status ) . '</td><td>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped in status_badge().
-			echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="aag-inline-form">';
+			echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="aag-inline-form" data-aag-confirm="deny" data-confirm-title="' . esc_attr( sprintf( /* translators: %s: caller key. */ __( 'Deny %s?', 'axle-ai-guard' ), (string) $key ) ) . '" data-confirm-body="' . esc_attr__( 'Its AI calls are blocked until you approve it again. You can undo this from the notice that follows.', 'axle-ai-guard' ) . '" data-confirm-yes="' . esc_attr__( 'Deny', 'axle-ai-guard' ) . '">';
 			self::form_fields( 'callers' );
-			echo '<input type="hidden" name="caller" value="' . esc_attr( (string) $key ) . '">';
+			echo '<input type="hidden" name="caller" value="' . esc_attr( (string) $key ) . '"><input type="hidden" name="prev" value="' . esc_attr( $status ) . '">';
 			if ( 'approved' !== $status ) {
 				echo '<button type="submit" name="status" value="approved" class="button">' . esc_html__( 'Approve', 'axle-ai-guard' ) . '</button> ';
 			}
 			if ( 'denied' !== $status ) {
-				echo '<button type="submit" name="status" value="denied" class="button">' . esc_html__( 'Deny', 'axle-ai-guard' ) . '</button>';
+				echo '<button type="submit" name="status" value="denied" class="button" data-aag-confirm-trigger="1">' . esc_html__( 'Deny', 'axle-ai-guard' ) . '</button>';
 			}
 			echo '</form></td></tr>';
 		}
-		echo '</tbody></table></section>';
+		echo '</tbody></table></div></section>';
 	}
 
 	/**
@@ -977,40 +1400,120 @@ final class Page implements Service {
 	}
 
 	/**
-	 * The "test a rule" box and its last result.
+	 * The "Try your rules" card. The text goes to this page in the same request and comes
+	 * back in the answer: it is never stored and never sent anywhere.
 	 */
 	private function render_test_box(): void {
-		$result = get_transient( 'axle_ai_guard_test_' . get_current_user_id() );
+		$result = null;
+		$text   = '';
+		$caller = '';
+		$ctx    = 'admin';
+		// phpcs:disable WordPress.Security.NonceVerification.Missing -- Verified on the next line.
+		if ( isset( $_POST['aag_try'] ) && check_admin_referer( 'axle_ai_guard_try' ) ) {
+			$text   = isset( $_POST['text'] ) ? sanitize_textarea_field( wp_unslash( $_POST['text'] ) ) : '';
+			$caller = isset( $_POST['caller'] ) ? sanitize_text_field( wp_unslash( $_POST['caller'] ) ) : '';
+			$ctx    = isset( $_POST['context'] ) ? sanitize_key( wp_unslash( $_POST['context'] ) ) : 'admin';
+			// phpcs:enable
+			$result = $this->reports->test_rules( $text, $caller, $ctx );
+		}
 
-		echo '<section class="axle-card aag-test" aria-labelledby="aag-test-title"><h2 class="axle-card__title" id="aag-test-title">' . esc_html__( 'Test the rules', 'axle-ai-guard' ) . '</h2>';
-		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">';
-		self::form_fields( 'test_rules' );
-		echo '<p><label for="aag-test-text">' . esc_html__( 'Paste text. Nothing is sent to any AI provider.', 'axle-ai-guard' ) . '</label></p>';
-		echo '<textarea id="aag-test-text" name="text" rows="5" class="large-text">' . esc_textarea( is_array( $result ) ? (string) $result['text'] : '' ) . '</textarea>';
-		submit_button( __( 'Test', 'axle-ai-guard' ), 'secondary', 'submit', false );
+		echo '<section class="axle-card aag-test" id="aag-test" aria-labelledby="aag-test-title"><h2 class="axle-card__title" id="aag-test-title">' . esc_html__( 'Try your rules', 'axle-ai-guard' ) . '</h2>';
+		echo '<p class="description">' . esc_html__( 'Paste a prompt to see what each rule would redact or block. The text is checked on this page only: it is never stored and never sent to any AI provider.', 'axle-ai-guard' ) . '</p>';
+		echo '<form method="post" action="' . esc_url( self::url( 'rules' ) . '#aag-test' ) . '">';
+		wp_nonce_field( 'axle_ai_guard_try' );
+		echo '<input type="hidden" name="aag_try" value="1">';
+		echo '<p><label for="aag-test-text">' . esc_html__( 'Text to check', 'axle-ai-guard' ) . '</label></p>';
+		echo '<textarea id="aag-test-text" name="text" rows="5" class="large-text" autocomplete="off">' . esc_textarea( $text ) . '</textarea>';
+		echo '<div class="axle-toolbar"><span class="aag-filter"><label for="aag-test-caller">' . esc_html__( 'Plugin', 'axle-ai-guard' ) . '</label> <select id="aag-test-caller" name="caller"><option value="">' . esc_html__( 'Any plugin', 'axle-ai-guard' ) . '</option>';
+		foreach ( array_keys( $this->settings->callers() ) as $name ) {
+			echo '<option value="' . esc_attr( (string) $name ) . '"' . selected( (string) $name, $caller, false ) . '>' . esc_html( (string) $name ) . '</option>';
+		}
+		echo '</select></span> <span class="aag-filter"><label for="aag-test-context">' . esc_html__( 'Context', 'axle-ai-guard' ) . '</label> <select id="aag-test-context" name="context">';
+		foreach ( self::context_labels() as $value => $label ) {
+			echo '<option value="' . esc_attr( $value ) . '"' . selected( $value, $ctx, false ) . '>' . esc_html( $label ) . '</option>';
+		}
+		echo '</select></span> <button type="submit" class="button button-primary">' . esc_html__( 'Check the text', 'axle-ai-guard' ) . '</button></div>';
 		echo '</form>';
 
 		if ( is_array( $result ) ) {
-			echo '<div class="aag-test-result" role="status">';
-			if ( ! $result['findings'] ) {
-				echo '<p><span class="axle-badge axle-badge--good">' . esc_html__( 'Nothing found', 'axle-ai-guard' ) . '</span></p>';
-			} else {
-				echo '<p><span class="axle-badge axle-badge--' . ( $result['blocked'] ? 'error' : 'info' ) . '">' . esc_html( $result['blocked'] ? __( 'Would be blocked', 'axle-ai-guard' ) : __( 'Would go out', 'axle-ai-guard' ) ) . '</span> <strong>' . esc_html( $result['blocked'] ? __( 'A call with this text would be blocked.', 'axle-ai-guard' ) : __( 'A call with this text would go out.', 'axle-ai-guard' ) ) . '</strong></p><ul>';
-				foreach ( $result['findings'] as $finding ) {
-					/* translators: 1: detector label, 2: count, 3: mode. */
-					echo '<li>' . esc_html( sprintf( __( '%1$s: %2$d found, mode %3$s', 'axle-ai-guard' ), $finding['label'], $finding['count'], $finding['mode'] ) ) . '</li>';
-				}
-				echo '</ul><p>' . esc_html__( 'What the provider would get:', 'axle-ai-guard' ) . '</p><pre class="axle-code aag-pre">' . esc_html( (string) $result['redacted'] ) . '</pre>';
-			}
-			echo '</div>';
+			$this->render_try_result( $text, $result );
 		}
 		echo '</section>';
+	}
+
+	/**
+	 * The answer of the rule test: outcome, rule, and the text with each match marked.
+	 *
+	 * @param string $text   The text.
+	 * @param array  $result From Reports::test_rules().
+	 */
+	private function render_try_result( string $text, array $result ): void {
+		$outcomes = array(
+			'sent'     => array( 'good', __( 'Sent as it is', 'axle-ai-guard' ), __( 'Nothing in this text needs to change. A call with it goes out unchanged.', 'axle-ai-guard' ) ),
+			'redacted' => array( 'info', __( 'Sent redacted', 'axle-ai-guard' ), __( 'A call with this text goes out with the matches replaced by placeholders.', 'axle-ai-guard' ) ),
+			'blocked'  => array( 'error', __( 'Blocked', 'axle-ai-guard' ), __( 'A call with this text is stopped before any request leaves the site.', 'axle-ai-guard' ) ),
+		);
+		$outcome  = $outcomes[ $result['outcome'] ];
+
+		echo '<div class="aag-test-result" role="status" aria-live="polite">';
+		echo '<p><span class="axle-badge axle-badge--' . esc_attr( $outcome[0] ) . '">' . esc_html( $outcome[1] ) . '</span> <strong>' . esc_html( $outcome[2] ) . '</strong></p>';
+		if ( '' !== $result['rule'] ) {
+			echo '<p>' . esc_html__( 'Decided by the rule:', 'axle-ai-guard' ) . ' <code>' . esc_html( $result['rule'] ) . '</code></p>';
+		}
+		if ( $result['too_large'] ) {
+			echo '<p class="axle-muted">' . esc_html__( 'The text is larger than the scan limit, so it was not scanned.', 'axle-ai-guard' ) . '</p>';
+		}
+		if ( ! $result['findings'] ) {
+			echo '<p class="axle-muted">' . esc_html__( 'No rule found anything in this text.', 'axle-ai-guard' ) . '</p></div>';
+			return;
+		}
+
+		echo '<h3>' . esc_html__( 'What each rule found', 'axle-ai-guard' ) . '</h3><ul class="aag-findings">';
+		foreach ( $result['findings'] as $finding ) {
+			/* translators: 1: detector label, 2: count, 3: mode. */
+			echo '<li>' . esc_html( sprintf( __( '%1$s: %2$d found, mode %3$s', 'axle-ai-guard' ), $finding['label'], $finding['count'], $finding['mode'] ) ) . '</li>';
+		}
+		echo '</ul><h3>' . esc_html__( 'Your text, with matches marked', 'axle-ai-guard' ) . '</h3><div class="aag-marked" tabindex="0" role="region" aria-label="' . esc_attr__( 'Your text with each match marked and labelled', 'axle-ai-guard' ) . '">';
+		$at = 0;
+		foreach ( $result['spans'] as $span ) {
+			echo esc_html( substr( $text, $at, $span['start'] - $at ) );
+			printf(
+				'<mark class="aag-mark aag-mark--%1$s">%2$s<span class="aag-mark__label"> [%3$s, %4$s]</span></mark>',
+				esc_attr( $span['mode'] ),
+				esc_html( substr( $text, $span['start'], $span['length'] ) ),
+				esc_html( $span['label'] ),
+				esc_html( $span['mode'] )
+			);
+			$at = $span['start'] + $span['length'];
+		}
+		echo esc_html( substr( $text, $at ) ) . '</div>';
+
+		if ( 'blocked' !== $result['outcome'] ) {
+			echo '<h3>' . esc_html__( 'What the provider would get', 'axle-ai-guard' ) . '</h3><div class="axle-diff"><del><span class="screen-reader-text">' . esc_html__( 'Before:', 'axle-ai-guard' ) . '</span> ' . esc_html( $text ) . '</del><ins><span class="screen-reader-text">' . esc_html__( 'After:', 'axle-ai-guard' ) . '</span> ' . esc_html( (string) $result['redacted'] ) . '</ins></div>';
+		}
+		echo '</div>';
 	}
 
 	/**
 	 * Prices tab.
 	 */
 	private function render_prices(): void {
+		$missing = $this->reports->unpriced_models();
+		if ( $missing ) {
+			echo '<div class="notice notice-warning inline aag-unpriced"><p><strong>' . esc_html__( 'Some models have no price, so their calls show a cost of zero.', 'axle-ai-guard' ) . '</strong></p><ul>';
+			foreach ( $missing as $row ) {
+				$key = strtolower( $row['provider'] . '/' . $row['model'] );
+				echo '<li><code>' . esc_html( $key ) . '</code> ' . esc_html(
+					sprintf(
+						/* translators: %s: number of calls. */
+						_n( '%s call', '%s calls', $row['calls'], 'axle-ai-guard' ),
+						number_format_i18n( $row['calls'] )
+					)
+				) . ' <a href="' . esc_url( self::url( 'prices', array( 'add' => $key ) ) . '#aag-price-new' ) . '">' . esc_html__( 'Add a price', 'axle-ai-guard' ) . '</a></li>';
+			}
+			echo '</ul><p>' . esc_html__( 'After you add a price, recalculate the last 30 days to fix their costs.', 'axle-ai-guard' ) . '</p></div>';
+		}
+
 		echo '<section class="axle-card"><h2 class="axle-card__title">' . esc_html__( 'Price table', 'axle-ai-guard' ) . '</h2>';
 		echo '<p class="description">' . esc_html(
 			sprintf(
@@ -1024,14 +1527,16 @@ final class Page implements Service {
 
 		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">';
 		self::form_fields( 'prices' );
-		echo '<table class="widefat striped aag-table aag-prices"><thead><tr><th scope="col">' . esc_html__( 'Provider/model', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Input', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Output', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Thought', 'axle-ai-guard' ) . '</th></tr></thead><tbody>';
+		echo '<div class="axle-scroll" tabindex="0" role="region" aria-label="' . esc_attr__( 'Price table', 'axle-ai-guard' ) . '"><table class="widefat striped aag-table aag-prices"><thead><tr><th scope="col">' . esc_html__( 'Provider/model', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Input', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Output', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Thought', 'axle-ai-guard' ) . '</th></tr></thead><tbody>';
 		$rows = array();
 		foreach ( $this->prices->table() as $key => $row ) {
 			$rows[] = array( 'key' => $key ) + $row;
 		}
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Pre-fills a field, saves nothing.
+		$add = isset( $_GET['add'] ) ? Prices::key( sanitize_text_field( wp_unslash( $_GET['add'] ) ) ) : '';
 		for ( $i = 0; $i < 3; $i++ ) {
 			$rows[] = array(
-				'key'     => '',
+				'key'     => 0 === $i ? $add : '',
 				'input'   => '',
 				'output'  => '',
 				'thought' => '',
@@ -1041,22 +1546,38 @@ final class Page implements Service {
 			/* translators: %d: row number. */
 			$label = sprintf( __( 'Price row %d', 'axle-ai-guard' ), $i + 1 );
 			echo '<tr>';
-			printf( '<td><input type="text" name="prices[%1$d][key]" value="%2$s" class="regular-text" aria-label="%3$s"></td>', (int) $i, esc_attr( (string) $row['key'] ), esc_attr( $label . ': ' . __( 'provider/model', 'axle-ai-guard' ) ) );
+			printf( '<td><input type="text" name="prices[%1$d][key]" value="%2$s" class="regular-text" aria-label="%3$s"' . ( '' !== $add && $add === $row['key'] && '' === (string) $row['input'] ? ' id="aag-price-new"' : '' ) . '></td>', (int) $i, esc_attr( (string) $row['key'] ), esc_attr( $label . ': ' . __( 'provider/model', 'axle-ai-guard' ) ) );
 			foreach ( array( 'input', 'output', 'thought' ) as $field ) {
 				printf( '<td><input type="text" inputmode="decimal" name="prices[%1$d][%2$s]" value="%3$s" class="small-text" aria-label="%4$s"></td>', (int) $i, esc_attr( $field ), esc_attr( (string) $row[ $field ] ), esc_attr( $label . ': ' . $field ) );
 			}
 			echo '</tr>';
 		}
-		echo '</tbody></table>';
+		echo '</tbody></table></div>';
 		echo '<p class="submit"><button type="submit" name="do" value="save" class="button button-primary">' . esc_html__( 'Save prices', 'axle-ai-guard' ) . '</button></p>';
 		echo '</section></form>';
 
-		echo '<section class="axle-card axle-card--danger"><h2 class="axle-card__title">' . esc_html__( 'Replace costs or prices', 'axle-ai-guard' ) . '</h2>';
-		echo '<p>' . esc_html__( 'Recalculating overwrites the stored cost of every call from the last 30 days with the current prices. Going back to the shipped prices removes your edits. Neither can be undone.', 'axle-ai-guard' ) . '</p>';
-		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="axle-actions">';
+		echo '<section class="axle-card aag-price-json" aria-labelledby="aag-json-title"><h2 class="axle-card__title" id="aag-json-title">' . esc_html__( 'Import and export', 'axle-ai-guard' ) . '</h2>';
+		echo '<p class="description">' . esc_html__( 'Export the table as JSON to keep a copy or use it on another site. Importing adds the models in the file and replaces the price of any model with the same key. The notice that follows has an Undo link.', 'axle-ai-guard' ) . '</p>';
+		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="aag-inline-form">';
 		self::form_fields( 'prices' );
-		echo '<button type="submit" name="do" value="recalc" class="button axle-button--danger">' . esc_html__( 'Recalculate the last 30 days', 'axle-ai-guard' ) . '</button> ';
-		echo '<button type="submit" name="do" value="reset" class="button axle-button--danger">' . esc_html__( 'Back to the shipped prices', 'axle-ai-guard' ) . '</button>';
+		echo '<button type="submit" name="do" value="export" class="button">' . esc_html__( 'Download the price table', 'axle-ai-guard' ) . '</button></form>';
+		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" data-aag-confirm="1" data-confirm-title="' . esc_attr__( 'Import these prices?', 'axle-ai-guard' ) . '" data-confirm-body="' . esc_attr__( 'Models in the JSON get the imported price, and models with the same key lose their current one. You can undo it from the notice that follows.', 'axle-ai-guard' ) . '" data-confirm-yes="' . esc_attr__( 'Import prices', 'axle-ai-guard' ) . '">';
+		self::form_fields( 'prices' );
+		echo '<p><label for="aag-import-json">' . esc_html__( 'Paste the JSON to import', 'axle-ai-guard' ) . '</label></p><textarea id="aag-import-json" name="json" rows="6" class="large-text code" autocomplete="off"></textarea>';
+		echo '<p class="submit"><button type="submit" name="do" value="import" class="button">' . esc_html__( 'Import prices', 'axle-ai-guard' ) . '</button></p></form></section>';
+
+		echo '<section class="axle-card axle-card--danger"><h2 class="axle-card__title">' . esc_html__( 'Replace costs or prices', 'axle-ai-guard' ) . '</h2>';
+		echo '<p>' . esc_html__( 'Recalculating overwrites the stored cost of every call from the last 30 days with the current prices, and cannot be undone. Preview first to see how many calls would change. Going back to the shipped prices removes your edits; the notice that follows has an Undo link.', 'axle-ai-guard' ) . '</p>';
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Display only.
+		$next = isset( $_GET['next'] ) ? absint( $_GET['next'] ) : 0;
+		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="axle-actions" data-aag-confirm="deny" data-confirm-title="' . esc_attr__( 'Replace the stored costs?', 'axle-ai-guard' ) . '" data-confirm-body="' . esc_attr__( 'This overwrites the stored cost of every call from the last 30 days. It cannot be undone. Preview shows what would change.', 'axle-ai-guard' ) . '" data-confirm-yes="' . esc_attr__( 'Recalculate the last 30 days', 'axle-ai-guard' ) . '">';
+		self::form_fields( 'prices' );
+		if ( $next ) {
+			echo '<input type="hidden" name="after" value="' . esc_attr( (string) $next ) . '">';
+		}
+		echo '<button type="submit" name="do" value="preview" class="button">' . esc_html__( 'Preview the change', 'axle-ai-guard' ) . '</button> ';
+		echo '<button type="submit" name="do" value="recalc" class="button axle-button--danger" data-aag-confirm-trigger="1">' . esc_html( $next ? __( 'Continue recalculating', 'axle-ai-guard' ) : __( 'Recalculate the last 30 days', 'axle-ai-guard' ) ) . '</button> ';
+		echo '<button type="submit" name="do" value="reset" class="button axle-button--danger" data-aag-reset="1">' . esc_html__( 'Back to the shipped prices', 'axle-ai-guard' ) . '</button>';
 		echo '</form></section>';
 	}
 
@@ -1099,9 +1620,24 @@ final class Page implements Service {
 
 		echo '<section class="axle-card"><h2 class="axle-card__title">' . esc_html__( 'Alerts', 'axle-ai-guard' ) . '</h2>';
 		echo '<table class="form-table" role="presentation"><tbody>';
-		self::check_row( 'alert_email', __( 'Email alerts', 'axle-ai-guard' ), __( 'Email alerts for budgets, kill switches, data rule blocks, new plugins and error spikes', 'axle-ai-guard' ), (bool) $all['alert_email'] );
+		self::check_row( 'alert_email', __( 'Email alerts', 'axle-ai-guard' ), __( 'Email alerts for budgets, forecasts, runaway plugins, kill switches, data rule blocks, new plugins and error spikes', 'axle-ai-guard' ), (bool) $all['alert_email'] );
 		self::text_row( 'alert_recipients', __( 'Alert recipients (empty: the site admin email)', 'axle-ai-guard' ), (string) $all['alert_recipients'], 'regular-text' );
 		self::text_row( 'webhook_url', __( 'Alert webhook URL (JSON POST)', 'axle-ai-guard' ), (string) $all['webhook_url'], 'regular-text' );
+		echo '</tbody></table></section>';
+
+		echo '<section class="axle-card"><h2 class="axle-card__title">' . esc_html__( 'Runaway protection', 'axle-ai-guard' ) . '</h2>';
+		echo '<p class="description">' . esc_html__( 'Watches how many AI calls each plugin makes per hour against its own normal hour from the last 7 days.', 'axle-ai-guard' ) . '</p>';
+		echo '<table class="form-table" role="presentation"><tbody><tr><th scope="row"><label for="aag-runaway_mode">' . esc_html__( 'When a plugin runs away', 'axle-ai-guard' ) . '</label></th><td><select id="aag-runaway_mode" name="settings[runaway_mode]">';
+		foreach ( array(
+			'off'   => __( 'Do nothing', 'axle-ai-guard' ),
+			'alert' => __( 'Alert only', 'axle-ai-guard' ),
+			'pause' => __( 'Pause that plugin and alert', 'axle-ai-guard' ),
+		) as $value => $label ) {
+			echo '<option value="' . esc_attr( $value ) . '"' . selected( $value, $all['runaway_mode'], false ) . '>' . esc_html( $label ) . '</option>';
+		}
+		echo '</select></td></tr>';
+		self::number_row( 'runaway_multiple', __( 'Runaway at this many times the usual hour', 'axle-ai-guard' ), (int) $all['runaway_multiple'] );
+		self::number_row( 'runaway_min_calls', __( 'But never below this many calls in an hour', 'axle-ai-guard' ), (int) $all['runaway_min_calls'] );
 		echo '</tbody></table></section>';
 
 		echo '<section class="axle-card"><h2 class="axle-card__title">' . esc_html__( 'Monitoring and automatic switch-off', 'axle-ai-guard' ) . '</h2>';
@@ -1179,9 +1715,10 @@ final class Page implements Service {
 	 *
 	 * @param string $tab  Tab.
 	 * @param string $done Message key.
+	 * @param array  $args Extra query arguments, such as what Undo needs.
 	 */
-	private static function back( string $tab, string $done ): void {
-		wp_safe_redirect( self::url( $tab, array( 'done' => $done ) ) );
+	private static function back( string $tab, string $done, array $args = array() ): void {
+		wp_safe_redirect( self::url( $tab, array_merge( array( 'done' => $done ), $args ) ) );
 		exit;
 	}
 
@@ -1207,7 +1744,14 @@ final class Page implements Service {
 		$reason  = sanitize_text_field( (string) self::posted( 'reason' ) );
 
 		$changed = $on ? $this->kill->engage( $scope, $subject, $reason, get_current_user_id() ) : $this->kill->release( $scope, $subject, get_current_user_id() );
-		self::back( 'overview', $changed ? ( $on ? 'kill_on' : 'kill_off' ) : 'kill_same' );
+		self::back(
+			'overview',
+			$changed ? ( $on ? 'kill_on' : 'kill_off' ) : 'kill_same',
+			array(
+				'k_scope'   => $scope,
+				'k_subject' => $subject,
+			)
+		);
 	}
 
 	/**
@@ -1241,8 +1785,17 @@ final class Page implements Service {
 	 */
 	public function handle_callers(): void {
 		self::verify( 'callers' );
-		$this->settings->set_caller_status( sanitize_text_field( (string) self::posted( 'caller' ) ), sanitize_key( (string) self::posted( 'status' ) ) );
-		self::back( 'budgets', 'callers' );
+		$caller = sanitize_text_field( (string) self::posted( 'caller' ) );
+		$prev   = sanitize_key( (string) self::posted( 'prev' ) );
+		$this->settings->set_caller_status( $caller, sanitize_key( (string) self::posted( 'status' ) ) );
+		self::back(
+			'budgets',
+			'callers',
+			array(
+				'caller' => $caller,
+				'prev'   => $prev,
+			)
+		);
 	}
 
 	/**
@@ -1256,31 +1809,57 @@ final class Page implements Service {
 	}
 
 	/**
-	 * Handles the rule test.
-	 */
-	public function handle_test_rules(): void {
-		self::verify( 'test_rules' );
-		$text   = sanitize_textarea_field( (string) self::posted( 'text' ) );
-		$result = $this->reports->test_rules( $text ) + array( 'text' => $text );
-		set_transient( 'axle_ai_guard_test_' . get_current_user_id(), $result, 10 * MINUTE_IN_SECONDS );
-		wp_safe_redirect( self::url( 'rules', array( 'tested' => 1 ) ) . '#aag-test-title' );
-		exit;
-	}
-
-	/**
 	 * Handles the prices form: save, reset or recalculate.
 	 */
 	public function handle_prices(): void {
 		self::verify( 'prices' );
 		$do = sanitize_key( (string) self::posted( 'do' ) );
 
+		if ( 'undo' === $do ) {
+			$this->prices->undo();
+			self::back( 'prices', 'prices_undone' );
+		}
 		if ( 'reset' === $do ) {
 			$this->prices->reset();
 			self::back( 'prices', 'prices_reset' );
 		}
-		if ( 'recalc' === $do ) {
-			$this->cleanup->recalculate( 30 );
-			self::back( 'prices', 'recalc' );
+		if ( 'export' === $do ) {
+			nocache_headers();
+			header( 'Content-Type: application/json; charset=utf-8' );
+			header( 'Content-Disposition: attachment; filename="axle-ai-guard-prices.json"' );
+			echo $this->prices->export_json(); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- A JSON download, not HTML.
+			exit;
+		}
+		if ( 'import' === $do ) {
+			$result = $this->prices->import_json( (string) self::posted( 'json' ) );
+			if ( is_wp_error( $result ) ) {
+				set_transient( 'axle_ai_guard_import_error_' . get_current_user_id(), $result->get_error_message(), MINUTE_IN_SECONDS );
+				self::back( 'prices', 'prices_import_failed' );
+			}
+			self::back( 'prices', 'prices_imported' );
+		}
+		if ( 'preview' === $do || 'recalc' === $do ) {
+			$after   = absint( (string) self::posted( 'after' ) );
+			$summary = $this->cleanup->recalculate( 30, 'preview' === $do, 'preview' === $do ? 0 : $after );
+			if ( 'preview' === $do ) {
+				self::back(
+					'prices',
+					'recalc_preview',
+					array(
+						'n' => $summary['rows'],
+						'c' => $summary['changed'],
+						'd' => $summary['delta'],
+					)
+				);
+			}
+			self::back(
+				'prices',
+				'recalc',
+				array(
+					'n'    => $summary['rows'],
+					'next' => $summary['complete'] ? 0 : $summary['next'],
+				)
+			);
 		}
 
 		$table = array();
@@ -1307,5 +1886,37 @@ final class Page implements Service {
 		self::verify( 'settings' );
 		$this->settings->save( (array) self::posted( 'settings' ) );
 		self::back( 'settings', 'settings' );
+	}
+
+	/**
+	 * Handles Resume, Resume and raise the limit, and Dismiss on a runaway warning.
+	 */
+	public function handle_runaway(): void {
+		self::verify( 'runaway' );
+		$event = sanitize_key( (string) self::posted( 'event' ) );
+		$do    = sanitize_key( (string) self::posted( 'do' ) );
+		$name  = '';
+		foreach ( $this->runaway->open_events() as $open ) {
+			if ( $event === $open['id'] ) {
+				$name = (string) $open['caller'];
+			}
+		}
+
+		if ( 'dismiss' === $do ) {
+			$ok = $this->runaway->dismiss( $event, get_current_user_id() );
+			self::back( 'overview', $ok ? 'runaway_closed' : 'runaway_same' );
+		}
+		$raise = 'raise' === $do;
+		$ok    = $this->runaway->resume( $event, get_current_user_id(), $raise );
+		self::back( 'overview', $ok ? ( $raise ? 'runaway_raised' : 'runaway_resumed' ) : 'runaway_same', array( 'caller' => $name ) );
+	}
+
+	/**
+	 * Hides the Get started card for the current user.
+	 */
+	public function handle_steps(): void {
+		self::verify( 'steps' );
+		update_user_meta( get_current_user_id(), 'axle_ai_guard_steps_dismissed', 1 );
+		self::back( 'overview', 'steps' );
 	}
 }

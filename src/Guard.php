@@ -301,25 +301,9 @@ final class Guard implements Service {
 
 				$this->stop_if( $call, $this->policy->estimate( $call, (int) $profile['estimate']['tokens'], (int) $profile['estimate']['cost'] ), $profile );
 
-				$block = null;
-				if ( $profile['files'] && ( $this->settings->policy( 'global' )['block_files'] || $this->settings->policy( 'plugin:' . $call['caller']['slug'] )['block_files'] ) ) {
-					$block = $this->policy->block( 'files', $call );
-				}
-				foreach ( $profile['actions'] as $id => $mode ) {
-					if ( ! $block && 'block' === $mode ) {
-						$block = $this->policy->block( 'data:' . $id, $call );
-					}
-				}
-				if ( ! $block && $profile['too_large'] && $this->has_block_rules( (string) $call['caller']['slug'] ) ) {
-					$block = $this->policy->block( 'scan', $call );
-				}
-
-				$block = $this->policy->decide( $call, 'data', $block );
-				if ( $block && ! self::block_in_before( $call ) ) {
-					// The exception path is off: the call goes ahead, block-mode data is redacted instead.
-					$profile['not_blocked'] = $block['rule'];
-					$block                  = null;
-				}
+				$check   = $this->data_check( $call, $profile );
+				$block   = $check['block'];
+				$profile = $check['profile'];
 				$this->stop_if( $call, $block, $profile );
 
 				$redact = array();
@@ -605,6 +589,41 @@ final class Guard implements Service {
 		}
 
 		return (int) $row['id'];
+	}
+
+	/**
+	 * Decides what the data rules and file rules do to a call, from its profile. The live call and
+	 * the "Try your rules" screen both go through here.
+	 *
+	 * @param array $call    Call details, with the caller.
+	 * @param array $profile Data profile from profile().
+	 * @return array{block: array|null, profile: array<string, mixed>} The block, and the profile with not_blocked set when the block is not enforced.
+	 */
+	public function data_check( array $call, array $profile ): array {
+		$block = null;
+		if ( $profile['files'] && ( $this->settings->policy( 'global' )['block_files'] || $this->settings->policy( 'plugin:' . $call['caller']['slug'] )['block_files'] ) ) {
+			$block = $this->policy->block( 'files', $call );
+		}
+		foreach ( $profile['actions'] as $id => $mode ) {
+			if ( ! $block && 'block' === $mode ) {
+				$block = $this->policy->block( 'data:' . $id, $call );
+			}
+		}
+		if ( ! $block && $profile['too_large'] && $this->has_block_rules( (string) $call['caller']['slug'] ) ) {
+			$block = $this->policy->block( 'scan', $call );
+		}
+
+		$block = $this->policy->decide( $call, 'data', $block );
+		if ( $block && ! self::block_in_before( $call ) ) {
+			// The exception path is off: the call goes ahead, block-mode data is redacted instead.
+			$profile['not_blocked'] = $block['rule'];
+			$block                  = null;
+		}
+
+		return array(
+			'block'   => $block,
+			'profile' => $profile,
+		);
 	}
 
 	/**

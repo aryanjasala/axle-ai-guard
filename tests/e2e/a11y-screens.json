@@ -10,6 +10,20 @@
       "steps": [{ "waitFor": ".aag-card" }]
     },
     {
+      "name": "Overview, get started and forecast",
+      "setup": [{ "js": "seed.js", "call": "seedActivity" }, ["axle-ai-guard", "budget", "set", "global", "--monthly-cost=0.0019"]],
+      "url": "/wp-admin/tools.php?page=axle-ai-guard",
+      "steps": [{ "waitFor": ".aag-forecast" }],
+      "cleanup": [{ "js": "seed.js", "call": "unseed" }]
+    },
+    {
+      "name": "Overview, runaway notice and confirm step",
+      "setup": [{ "js": "seed.js", "call": "seedActivity" }, { "js": "seed.js", "call": "seedRunaway" }],
+      "url": "/wp-admin/tools.php?page=axle-ai-guard",
+      "steps": [{ "waitFor": ".aag-runaway-notice" }, { "click": ".aag-callers tr[data-caller=\"caller-b\"] .aag-kill-toggle" }, { "waitFor": ".axle-confirm" }],
+      "cleanup": [{ "js": "seed.js", "call": "unseed" }]
+    },
+    {
       "name": "Overview with calls, budgets and blocks",
       "setup": [{ "js": "seed.js", "call": "seedActivity" }],
       "url": "/wp-admin/tools.php?page=axle-ai-guard",
@@ -64,14 +78,21 @@
       "steps": [{ "waitFor": ".aag-rules" }]
     },
     {
-      "name": "Data rules, test box with a result",
+      "name": "Data rules, try your rules with a result",
       "url": "/wp-admin/tools.php?page=axle-ai-guard&tab=rules",
-      "steps": [{ "fill": "#aag-test-text", "value": "Mail admin@example.com or call +91 98765 43210" }, { "click": ".aag-test input[type=submit]" }, { "waitFor": ".aag-test-result" }]
+      "steps": [{ "fill": "#aag-test-text", "value": "Mail admin@example.com or call +91 98765 43210" }, { "click": ".aag-test .button-primary" }, { "waitFor": ".aag-test-result" }]
     },
     {
       "name": "Prices",
       "url": "/wp-admin/tools.php?page=axle-ai-guard&tab=prices",
       "steps": [{ "waitFor": ".aag-prices" }]
+    },
+    {
+      "name": "Prices, missing price and import",
+      "setup": [{ "js": "seed.js", "call": "seedUnpriced" }],
+      "url": "/wp-admin/tools.php?page=axle-ai-guard&tab=prices",
+      "steps": [{ "waitFor": ".aag-unpriced" }],
+      "cleanup": [{ "js": "seed.js", "call": "unseed" }]
     },
     {
       "name": "Settings",

@@ -14,11 +14,16 @@ defined( 'ABSPATH' ) || exit;
 /**
  * One row per period and subject. Periods are d:2026-10-30, m:2026-10 and,
  * for rate limits without a persistent object cache, n:202610301405 (a
- * minute). Subjects are global, plugin:<caller>, provider:<id>, user:<id>
+ * minute) and h:2026103014 (an hour, for the runaway guard). Subjects are global, plugin:<caller>, provider:<id>, user:<id>
  * and ip:<hash>. Counters only grow through INSERT ... ON DUPLICATE KEY
  * UPDATE x = x + n, so parallel requests never lose a count.
  */
 final class Usage {
+
+	/**
+	 * Days the hour buckets are kept: the runaway baseline looks back seven.
+	 */
+	public const HOUR_DAYS = 7;
 
 	/**
 	 * The day and month periods of a time.
@@ -155,6 +160,90 @@ final class Usage {
 	}
 
 	/**
+	 * Counts a finished call in this hour's bucket of a subject and returns the
+	 * calls so far this hour. One upsert; LAST_INSERT_ID( expr ) hands the new
+	 * count back with no second query. A new row (or a database that does not
+	 * return it) reads the row once.
+	 *
+	 * @param string   $subject Subject, such as plugin:caller-a.
+	 * @param int      $cost    Cost in micro-units.
+	 * @param int|null $time    When, or now.
+	 * @return int Calls this hour, including this one.
+	 */
+	public function hit_hour( string $subject, int $cost, ?int $time = null ): int {
+		global $wpdb;
+
+		$period = 'h:' . gmdate( 'YmdH', null === $time ? time() : $time );
+
+		$wpdb->insert_id = 0;
+		$wpdb->query(
+			$wpdb->prepare(
+				'INSERT INTO %i (period, subject, calls, tokens, cost_micros) VALUES (%s, %s, 1, 0, %d) ON DUPLICATE KEY UPDATE calls = LAST_INSERT_ID(calls + 1), cost_micros = cost_micros + %d',
+				Schema::table( 'usage' ),
+				$period,
+				substr( $subject, 0, 120 ),
+				max( 0, $cost ),
+				max( 0, $cost )
+			)
+		);
+
+		$count = (int) $wpdb->insert_id;
+
+		// @phpstan-ignore-next-line -- insert_id is set by the query above.
+		return $count > 0 ? $count : max( 1, $this->get( $period, $subject )['calls'] );
+	}
+
+	/**
+	 * The hour buckets of a subject between two times, oldest first.
+	 *
+	 * @param string $subject Subject.
+	 * @param int    $from    Unix time of the first hour.
+	 * @param int    $to      Unix time of the last hour.
+	 * @return array<string, array{calls: int, cost: int}> Keyed by period.
+	 */
+	public function hours( string $subject, int $from, int $to ): array {
+		return $this->range( 'h:', gmdate( 'YmdH', $from ), gmdate( 'YmdH', $to ), $subject );
+	}
+
+	/**
+	 * The day counters of a subject between two times, oldest first.
+	 *
+	 * @param string $subject Subject.
+	 * @param int    $from    Unix time of the first day.
+	 * @param int    $to      Unix time of the last day.
+	 * @return array<string, array{calls: int, cost: int, tokens: int}> Keyed by period.
+	 */
+	public function days( string $subject, int $from, int $to ): array {
+		return $this->range( 'd:', gmdate( 'Y-m-d', $from ), gmdate( 'Y-m-d', $to ), $subject );
+	}
+
+	/**
+	 * Rows of one subject for periods of one kind between two stamps.
+	 *
+	 * @param string $kind    h: or d:.
+	 * @param string $first   First stamp.
+	 * @param string $last    Last stamp.
+	 * @param string $subject Subject.
+	 * @return array<string, array{calls: int, cost: int, tokens: int}>
+	 */
+	private function range( string $kind, string $first, string $last, string $subject ): array {
+		global $wpdb;
+
+		$rows = $wpdb->get_results( $wpdb->prepare( 'SELECT period, calls, tokens, cost_micros FROM %i WHERE subject = %s AND period >= %s AND period <= %s ORDER BY period ASC LIMIT 400', Schema::table( 'usage' ), $subject, $kind . $first, $kind . $last ), ARRAY_A );
+		$out  = array();
+
+		foreach ( is_array( $rows ) ? $rows : array() as $row ) {
+			$out[ (string) $row['period'] ] = array(
+				'calls'  => (int) $row['calls'],
+				'tokens' => (int) $row['tokens'],
+				'cost'   => (int) $row['cost_micros'],
+			);
+		}
+
+		return $out;
+	}
+
+	/**
 	 * Deletes counter rows older than the retention, and minute buckets older than an hour.
 	 *
 	 * @param int $days  Days to keep day and month rows.
@@ -169,6 +258,7 @@ final class Usage {
 		$deleted = 0;
 
 		$deleted += (int) $wpdb->query( $wpdb->prepare( 'DELETE FROM %i WHERE period LIKE %s AND period < %s LIMIT %d', $table, 'n:%', 'n:' . gmdate( 'YmdHi', time() - HOUR_IN_SECONDS ), $limit ) );
+		$deleted += (int) $wpdb->query( $wpdb->prepare( 'DELETE FROM %i WHERE period LIKE %s AND period < %s LIMIT %d', $table, 'h:%', 'h:' . gmdate( 'YmdH', time() - ( self::HOUR_DAYS + 1 ) * DAY_IN_SECONDS ), $limit ) );
 		$deleted += (int) $wpdb->query( $wpdb->prepare( 'DELETE FROM %i WHERE period LIKE %s AND period < %s LIMIT %d', $table, 'd:%', 'd:' . gmdate( 'Y-m-d', $cutoff ), $limit ) );
 		$deleted += (int) $wpdb->query( $wpdb->prepare( 'DELETE FROM %i WHERE period LIKE %s AND period < %s LIMIT %d', $table, 'm:%', 'm:' . gmdate( 'Y-m', $cutoff ), $limit ) );
 

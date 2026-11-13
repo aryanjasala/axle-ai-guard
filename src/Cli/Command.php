@@ -11,8 +11,10 @@ use AryanX\Axle\AiGuard\Calls;
 use AryanX\Axle\AiGuard\Cleanup;
 use AryanX\Axle\AiGuard\Detectors;
 use AryanX\Axle\AiGuard\KillSwitch;
+use AryanX\Axle\AiGuard\Forecast;
 use AryanX\Axle\AiGuard\Prices;
 use AryanX\Axle\AiGuard\Reports;
+use AryanX\Axle\AiGuard\Runaway;
 use AryanX\Axle\AiGuard\Settings;
 use WP_CLI;
 
@@ -73,6 +75,20 @@ final class Command {
 	private Cleanup $cleanup;
 
 	/**
+	 * Runaway guard.
+	 *
+	 * @var Runaway
+	 */
+	private Runaway $runaway;
+
+	/**
+	 * Forecast.
+	 *
+	 * @var Forecast
+	 */
+	private Forecast $forecast;
+
+	/**
 	 * Sets up the command.
 	 *
 	 * @param Settings   $settings  Settings.
@@ -82,8 +98,10 @@ final class Command {
 	 * @param Calls      $calls     The call log.
 	 * @param Reports    $reports   Reports.
 	 * @param Cleanup    $cleanup   Clean-up.
+	 * @param Runaway    $runaway   Runaway guard.
+	 * @param Forecast   $forecast  Forecast.
 	 */
-	public function __construct( Settings $settings, KillSwitch $kill, Detectors $detectors, Prices $prices, Calls $calls, Reports $reports, Cleanup $cleanup ) {
+	public function __construct( Settings $settings, KillSwitch $kill, Detectors $detectors, Prices $prices, Calls $calls, Reports $reports, Cleanup $cleanup, Runaway $runaway, Forecast $forecast ) {
 		$this->settings  = $settings;
 		$this->kill      = $kill;
 		$this->detectors = $detectors;
@@ -91,6 +109,8 @@ final class Command {
 		$this->calls     = $calls;
 		$this->reports   = $reports;
 		$this->cleanup   = $cleanup;
+		$this->runaway   = $runaway;
+		$this->forecast  = $forecast;
 	}
 
 	/**
@@ -447,6 +467,12 @@ final class Command {
 	 * [<value>...]
 	 * : For set: detector and mode (off, log, redact, block). For test: the text, or - to read standard input.
 	 *
+	 * [--plugin=<caller>]
+	 * : For test: the caller whose rules apply, such as seo-writer.
+	 *
+	 * [--context=<context>]
+	 * : For test: admin, front, cron, rest, ajax or cli.
+	 *
 	 * [--format=<format>]
 	 * : For list.
 	 * ---
@@ -483,7 +509,7 @@ final class Command {
 			if ( '-' === $text ) {
 				$text = (string) file_get_contents( 'php://stdin' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents, WordPressVIPMinimum.Performance.FetchingRemoteData.FileGetContentsRemoteFile -- Standard input.
 			}
-			WP_CLI::line( (string) wp_json_encode( $this->reports->test_rules( $text ), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
+			WP_CLI::line( (string) wp_json_encode( $this->reports->test_rules( $text, (string) ( $assoc['plugin'] ?? '' ), (string) ( $assoc['context'] ?? '' ) ), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
 			return;
 		}
 
@@ -504,10 +530,10 @@ final class Command {
 	 * ## OPTIONS
 	 *
 	 * <action>
-	 * : list, set, reset or recalc.
+	 * : list, set, reset, undo, export, import, missing or recalc.
 	 *
 	 * [<model>]
-	 * : For set: provider/model, such as openai/gpt-5-mini (a * at the end matches more).
+	 * : For set: provider/model, such as openai/gpt-5-mini (a * at the end matches more). For import: a JSON file, or - to read standard input.
 	 *
 	 * [--input=<price>]
 	 * : Input price per million tokens.
@@ -520,6 +546,9 @@ final class Command {
 	 *
 	 * [--days=<days>]
 	 * : For recalc.
+	 *
+	 * [--dry-run]
+	 * : For recalc: count what would change and change nothing.
 	 * ---
 	 * default: 30
 	 * ---
@@ -554,10 +583,51 @@ final class Command {
 			WP_CLI::success( __( 'Prices are back to the shipped table.', 'axle-ai-guard' ) );
 			return;
 		}
+		if ( 'undo' === $action ) {
+			if ( $this->prices->undo() ) {
+				WP_CLI::success( __( 'The last price change was undone.', 'axle-ai-guard' ) );
+				return;
+			}
+			WP_CLI::error( __( 'There is no price change to undo.', 'axle-ai-guard' ) );
+			return;
+		}
+		if ( 'export' === $action ) {
+			WP_CLI::line( $this->prices->export_json() );
+			return;
+		}
+		if ( 'import' === $action ) {
+			$source = (string) ( $args[1] ?? '' );
+			// phpcs:disable WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents, WordPressVIPMinimum.Performance.FetchingRemoteData -- A local file the operator named, or standard input.
+			$json = '-' === $source ? (string) file_get_contents( 'php://stdin' ) : ( '' !== $source && is_readable( $source ) ? (string) file_get_contents( $source ) : '' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents, WordPressVIPMinimum.Performance.FetchingRemoteData.FileGetContentsRemoteFile -- A local file or standard input.
+			// phpcs:enable
+			$result = $this->prices->import_json( $json );
+			if ( is_wp_error( $result ) ) {
+				WP_CLI::error( $result->get_error_message() );
+				return;
+			}
+			/* translators: 1: models imported, 2: models skipped. */
+			WP_CLI::success( sprintf( __( 'Imported %1$d prices, skipped %2$d. "wp axle-ai-guard prices undo" puts the old table back.', 'axle-ai-guard' ), $result['imported'], $result['skipped'] ) );
+			return;
+		}
+		if ( 'missing' === $action ) {
+			\WP_CLI\Utils\format_items( (string) ( $assoc['format'] ?? 'table' ), $this->reports->unpriced_models(), array( 'provider', 'model', 'calls', 'tokens' ) );
+			return;
+		}
 		if ( 'recalc' === $action ) {
-			$result = $this->cleanup->recalculate( (int) ( $assoc['days'] ?? 30 ) );
+			$dry    = ! empty( $assoc['dry-run'] );
+			$after  = 0;
+			$totals = array(
+				'rows'    => 0,
+				'changed' => 0,
+			);
+			do {
+				$result             = $this->cleanup->recalculate( (int) ( $assoc['days'] ?? 30 ), $dry, $after );
+				$totals['rows']    += $result['rows'];
+				$totals['changed'] += $result['changed'];
+				$after              = $result['next'];
+			} while ( ! $result['complete'] );
 			/* translators: 1: changed rows, 2: rows checked. */
-			WP_CLI::success( sprintf( __( 'Recalculated: %1$d of %2$d calls changed.', 'axle-ai-guard' ), $result['changed'], $result['rows'] ) );
+			WP_CLI::success( sprintf( $dry ? __( 'Dry run: %1$d of %2$d calls would change.', 'axle-ai-guard' ) : __( 'Recalculated: %1$d of %2$d calls changed.', 'axle-ai-guard' ), $totals['changed'], $totals['rows'] ) );
 			return;
 		}
 
@@ -570,6 +640,89 @@ final class Command {
 			WP_CLI::log( sprintf( __( 'Per million tokens, in %1$s. Prices as of %2$s.', 'axle-ai-guard' ), $this->prices->currency(), $this->prices->as_of() ) );
 		}
 		\WP_CLI\Utils\format_items( (string) ( $assoc['format'] ?? 'table' ), $rows, array( 'model', 'input', 'output', 'thought' ) );
+	}
+
+	/**
+	 * Shows runaway protection, or resumes a paused caller.
+	 *
+	 * ## OPTIONS
+	 *
+	 * [<action>]
+	 * : status, resume or dismiss.
+	 * ---
+	 * default: status
+	 * ---
+	 *
+	 * [<caller>]
+	 * : For resume and dismiss: the caller key, or an event id.
+	 *
+	 * [--raise-limit]
+	 * : For resume: also raise the caller's floor to twice what ran away.
+	 *
+	 * [--format=<format>]
+	 * : For status: table, csv, json or yaml.
+	 * ---
+	 * default: table
+	 * ---
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp axle-ai-guard runaway status
+	 *     wp axle-ai-guard runaway resume seo-writer --raise-limit
+	 *
+	 * @param array $args  Positional arguments.
+	 * @param array $assoc Options.
+	 */
+	public function runaway( $args, $assoc ): void {
+		$action = (string) ( $args[0] ?? 'status' );
+
+		if ( 'resume' === $action || 'dismiss' === $action ) {
+			$target = (string) ( $args[1] ?? '' );
+			$found  = '';
+			foreach ( $this->runaway->open_events() as $event ) {
+				if ( $target === $event['id'] || $target === $event['caller'] ) {
+					$found = (string) $event['id'];
+				}
+			}
+			if ( '' === $found ) {
+				WP_CLI::error( __( 'No open runaway event for that caller or id. "wp axle-ai-guard runaway status" lists them.', 'axle-ai-guard' ) );
+				return;
+			}
+			if ( 'dismiss' === $action ) {
+				$this->runaway->dismiss( $found, get_current_user_id() );
+				WP_CLI::success( __( 'Event dismissed.', 'axle-ai-guard' ) );
+				return;
+			}
+			$this->runaway->resume( $found, get_current_user_id(), ! empty( $assoc['raise-limit'] ) );
+			WP_CLI::success( __( 'AI calls resumed.', 'axle-ai-guard' ) );
+			return;
+		}
+
+		$format = (string) ( $assoc['format'] ?? 'table' );
+		if ( 'table' === $format ) {
+			/* translators: %s: off, alert or pause. */
+			WP_CLI::log( sprintf( __( 'Runaway protection: %s.', 'axle-ai-guard' ), $this->runaway->mode() ) );
+		}
+		$rows = array();
+		foreach ( $this->runaway->callers() as $row ) {
+			$row['paused'] = $row['paused'] ? 'yes' : 'no';
+			$row['exempt'] = $row['exempt'] ? 'yes' : 'no';
+			$rows[]        = $row;
+		}
+		\WP_CLI\Utils\format_items( $format, $rows, array( 'caller', 'calls_hour', 'base_calls', 'calls_limit', 'paused', 'exempt', 'event' ) );
+
+		if ( 'table' === $format ) {
+			foreach ( $this->forecast->all() as $forecast ) {
+				WP_CLI::log(
+					sprintf(
+						/* translators: 1: subject, 2: state. */
+						__( 'Forecast for %1$s: %2$s', 'axle-ai-guard' ),
+						$forecast['subject'],
+						$forecast['crosses'] ? sprintf( /* translators: %s: day of the month. */ __( 'the monthly budget runs out on the %s.', 'axle-ai-guard' ), wp_date( 'jS', $forecast['runs_out'] ) ) : ( 'reached' === $forecast['state'] ? __( 'the monthly budget is used up.', 'axle-ai-guard' ) : __( 'the monthly budget lasts to the end of the month.', 'axle-ai-guard' ) )
+					)
+				);
+			}
+		}
 	}
 
 	/**
