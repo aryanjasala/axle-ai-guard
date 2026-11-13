@@ -61,6 +61,17 @@ Redaction rewrites the JSON body for three formats: OpenAI (`messages[].content`
 - Rate limits count calls per minute: global 120, per caller 60, per logged-in user 20, per anonymous IP 5. 0 is off. Buckets live in the object cache when it is persistent, else in the usage table (rows older than an hour are pruned).
 - Cost = prompt tokens x input price + completion tokens x output price + thought tokens x thought price, per million. The price table ships with list prices; keys ending in `*` match every model id that starts with the rest, and the longest match wins.
 
+## Usage per user and role
+
+**Tools > AI Guard > Users and roles** shows who triggered the AI calls, for today, the last 7 days, the last 30 days, this month or last month (UTC). It reads the call log, so every call keeps the currency it was priced in: cost is listed per currency and never added across currencies.
+
+- Calls are the calls that ran. Blocked calls are counted in their own column.
+- Each user counts under their first role, as they have it now, so the role totals add up to the site total. Change that with `axle_ai_guard_user_report_role`. Calls with no logged-in user (visitors, cron, WP-CLI) are in a **No user** row, deleted users in **Deleted users**.
+- **Download users as CSV** and **Download roles as CSV** give one row per user (or role) and currency, with the cost as a plain number. Cells that start with `=`, `+`, `-` or `@` are prefixed with a quote so a spreadsheet does not run them. The file has login names and no email addresses.
+- Only people with `axle_ai_guard_manage` (see `axle_ai_guard_capability`) see the tab, download the file or run the ability.
+- A person erased through **Tools > Erase Personal Data** has no user on their calls any more, so they move to No user and the totals stay the same.
+- The report reads up to 1,000 user and currency groups. A notice says when that cut it short.
+
 ## Hooks
 
 ### Filters
@@ -105,6 +116,11 @@ Redaction rewrites the JSON body for three formats: OpenAI (`messages[].content`
 | `axle_ai_guard_runaway_check_every` | `( int $calls )` | Check a caller every this many calls in an hour. Default 10 |
 | `axle_ai_guard_forecast_days` | `( int $days )` | Days of use the forecast takes its pace from. Default 7 |
 | `axle_ai_guard_forecast` | `( array $forecast, string $subject )` | The forecast of a budget |
+| `axle_ai_guard_user_report_periods` | `( array $periods )` | The periods of the usage report: each key has `label`, `since` and `until` (UTC `Y-m-d H:i:s`, until excluded). Invalid ones are dropped |
+| `axle_ai_guard_user_report_limit` | `( int $limit )` | Most user and currency groups the report reads. Default 1000, 1 to 5000 |
+| `axle_ai_guard_user_report_role` | `( string $role, WP_User $user )` | The role a user counts under. Default their first role |
+| `axle_ai_guard_user_report` | `( array $report, string $period )` | The finished report, before the screen, CSV or ability use it |
+| `axle_ai_guard_user_report_csv_row` | `( array $row, array $item, string $by )` | One CSV row. `$by` is `user` or `role` |
 | `axle_ai_guard_prices_import_max` | `( int $max )` | Most models per import. Default 500 |
 | `axle_ai_guard_recalc_seconds` | `( int $seconds )` | Seconds one recalculation request may run. Default 15 |
 
@@ -127,6 +143,7 @@ Redaction rewrites the JSON body for three formats: OpenAI (`messages[].content`
 | `axle_ai_guard_logs_pruned` | `( array $counts )` | Old rows were deleted |
 | `axle_ai_guard_runaway_detected` | `( array $event )` | A caller was flagged. `$event` has id, caller, at, mode, paused, calls, cost, base_calls, base_cost, multiple, by |
 | `axle_ai_guard_runaway_resumed` | `( array $event, bool $raised, int $user_id )` | Someone resumed a flagged caller |
+| `axle_ai_guard_user_report_exported` | `( string $by, string $period, int $rows, int $user_id )` | Someone downloaded the usage CSV |
 | `axle_ai_guard_forecast_crossed` | `( string $subject, array $forecast )` | A forecast shows a monthly budget running out early. Once a month per budget |
 | `axle_ai_guard_prices_saved` | `( array $table )` | The price table was saved or imported |
 | `axle_ai_guard_costs_recalculated` | `( array $summary, int $days )` | Costs were recalculated |
@@ -187,6 +204,7 @@ Category `axle-ai-guard`, all behind `axle_ai_guard_manage`, all listed for the 
 | Ability | Annotations | Input | Output |
 | --- | --- | --- | --- |
 | `axle-ai-guard/get-usage` | readonly | `period` (day, month), `by` (plugin, provider, model, user) | `total` and `groups` with calls, tokens, cost (micro-units), blocked |
+| `axle-ai-guard/get-user-usage` | readonly | `period` (today, 7d, 30d, month, last_month), `by` (user, role) | `totals`, `groups` (users or roles) with calls, blocked, tokens, costs per currency (micro-units), `truncated` |
 | `axle-ai-guard/list-calls` | readonly | `status`, `plugin`, `provider`, `model`, `context`, `since`, `limit`, `include_preview` | Calls with their data profile; previews only when asked and stored |
 | `axle-ai-guard/get-limits` | readonly | none | Budgets with usage, rate limits, data rule modes, kill switches that are on |
 | `axle-ai-guard/engage-kill-switch` | idempotent | `scope` (global, plugin, provider, context), `subject`, `reason` | `{ scope, subject, changed, on }` |
@@ -203,6 +221,7 @@ Routes under `axle-ai-guard/v1`, for the screens, behind the same capability: `G
 
 ```sh
 wp axle-ai-guard usage [--period=day|month] [--by=plugin|provider|model|user] [--format=<format>]
+wp axle-ai-guard user-usage [--period=today|7d|30d|month|last_month] [--by=user|role] [--format=<format>]
 wp axle-ai-guard calls [--status=<status>] [--plugin=<caller>] [--provider=<id>] [--since=<date>] [--limit=<n>] [--format=<format>]
 wp axle-ai-guard call <id>
 wp axle-ai-guard kill [--plugin=<caller>] [--provider=<id>] [--context=<context>] [--reason=<reason>]
@@ -257,7 +276,7 @@ Uninstalling removes the tables, options, transients, cron event and capability 
 
 ## Privacy
 
-User IDs and anonymised visitor IP addresses are personal data, as are previews and stored prompts when they are on (redacted). **Tools > Export Personal Data** lists a user's calls; **Tools > Erase Personal Data** removes the user, IP address, preview and stored prompt and keeps the record that a call happened, so totals stay right. The Get started card is hidden per user with a user meta value, removed on uninstall. Settings > Privacy gets suggested text. The only outgoing request the plugin makes is the optional alert webhook.
+User IDs and anonymised visitor IP addresses are personal data, as are previews and stored prompts when they are on (redacted). **Tools > Export Personal Data** lists a user's calls; **Tools > Erase Personal Data** removes the user, IP address, preview and stored prompt and keeps the record that a call happened, so totals stay right. The Users and roles report reads the call log, so an erased user moves to No user in it. The Get started card is hidden per user with a user meta value, removed on uninstall. Settings > Privacy gets suggested text. The only outgoing request the plugin makes is the optional alert webhook.
 
 ## Limits
 

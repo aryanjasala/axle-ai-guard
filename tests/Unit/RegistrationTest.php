@@ -45,7 +45,7 @@ final class RegistrationTest extends GuardTestCase {
 		$this->assertSame( 10, has_action( 'wp_abilities_api_init', array( $abilities, 'register_abilities' ) ) );
 		$abilities->register_abilities();
 
-		$this->assertSame( array( 'axle-ai-guard/get-usage', 'axle-ai-guard/list-calls', 'axle-ai-guard/get-limits', 'axle-ai-guard/engage-kill-switch', 'axle-ai-guard/test-data-rules', 'axle-ai-guard/get-runaway-status' ), array_keys( $registered ) );
+		$this->assertSame( array( 'axle-ai-guard/get-usage', 'axle-ai-guard/get-user-usage', 'axle-ai-guard/list-calls', 'axle-ai-guard/get-limits', 'axle-ai-guard/engage-kill-switch', 'axle-ai-guard/test-data-rules', 'axle-ai-guard/get-runaway-status' ), array_keys( $registered ) );
 		foreach ( $registered as $name => $args ) {
 			$readonly = 'axle-ai-guard/engage-kill-switch' !== $name;
 			$this->assertSame( $readonly, $args['meta']['annotations']['readonly'], $name );

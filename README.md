@@ -36,13 +36,14 @@ Since WordPress 7.0 any plugin can call an AI provider through the WordPress AI 
 - **Runaway protection**: learns each plugin's normal calls per hour from the last 7 days. A plugin that makes ten times that, and at least 100 calls in an hour, is paused on its own (new installs) or flagged (existing installs), you get an alert, and one click resumes it, with or without raising its limit
 - **Month-end forecast**: at the pace of the last 7 days, the day each monthly budget runs out, for the site and each plugin, with one alert a month
 - **Data rules**: detectors for user emails, any email, phone numbers, IP addresses, card numbers (Luhn), password hashes, WordPress salts, connector API keys and your own strings or regexes. Each one off, log, redact or block. Redaction rewrites the request body for OpenAI, Anthropic and Google formats and keeps no map back. Try your rules: paste text and see each match marked and labelled, the outcome and the rule that decided, with nothing stored or sent
+- **Usage per user and role**: who triggered the calls, with calls, tokens and cost per currency, for today, 7 or 30 days, this month or last month. Each user counts under their first role, so the role totals add up. Download it as CSV (login names, no email addresses). When someone is erased, their calls move to No user
 - **Money and token budgets**: daily and monthly, for the site and per plugin, in the site currency. Alert at 80%, block at 100%. Parallel requests never lose a count
 - **Rate limits**: per plugin, per logged-in user, per visitor IP address (so a chatbot cannot become a free AI proxy) and for the site
 - **Kill switches**: site, plugin, provider or context (no AI on the front end), from the screen, WP-CLI, an ability or a wp-config.php constant. Network switch on multisite. Optional auto-trip on the monthly budget or an error spike
 - **What was sent and what it cost**: caller and the file it was traced to, context, user, provider, model, tokens, estimated cost, timing and HTTP status. A data profile instead of the prompt; previews and a redacted prompt store are opt-in
 - **Rules per plugin**: allowed contexts, providers, models and roles, file attachments, and approval for plugins making their first call
 - **Alerts** by email and webhook, throttled to one per event and subject an hour
-- **Abilities** for agents to read usage and runaway status and pull the kill switch (none to turn it back on), full **WP-CLI**, Site Health checks, privacy export and erase
+- **Abilities** for agents to read usage (also per user and role) and runaway status and pull the kill switch (none to turn it back on), full **WP-CLI**, Site Health checks, privacy export and erase
 
 ## Install
 
@@ -63,6 +64,7 @@ Needs WordPress 7.0+ and PHP 7.4+. To try it first, [try.axlewp.com/axle-ai-guar
 wp axle-ai-guard usage --by=plugin
 # Total: 214 calls, 312,400 tokens, USD 1.84, 9 blocked.
 
+wp axle-ai-guard user-usage --period=7d --by=role
 wp axle-ai-guard budget set global --monthly-cost=25
 wp axle-ai-guard limit set plugin:chatbot --per-minute=10
 wp axle-ai-guard rules test "Reply to jane@example.com"
@@ -83,7 +85,7 @@ Or open **Tools > AI Guard**.
     <td width="50%" valign="top"><img src=".wordpress-org/screenshot-4.png" alt="Budgets and limits per plugin: tokens and money, rate limits, contexts, providers, models and roles"><br><sub>Budgets and limits per plugin: tokens and money, rate limits, contexts, providers, models and roles</sub></td>
   </tr>
   <tr>
-    <td width="50%" valign="top"><img src=".wordpress-org/screenshot-5.png" alt="Data rules with the test box: what each detector found and what the provider would get"><br><sub>Data rules with the test box: what each detector found and what the provider would get</sub></td>
+    <td width="50%" valign="top"><img src=".wordpress-org/screenshot-5.png" alt="Data rules with Try your rules: each match marked and labelled, the outcome and the rule that decided"><br><sub>Data rules with Try your rules: each match marked and labelled, the outcome and the rule that decided</sub></td>
     <td width="50%" valign="top"><img src=".wordpress-org/screenshot-6.png" alt="Prices per provider and model, editable, with the date they are from"><br><sub>Prices per provider and model, editable, with the date they are from</sub></td>
   </tr>
 </table>
@@ -92,7 +94,7 @@ Or open **Tools > AI Guard**.
 
 | Doc | What it covers |
 | --- | --- |
-| [Reference](docs/REFERENCE.md) | How a call is checked, runaway protection and forecast, try your rules, callers, data rules, budgets and costs, hooks, JS hooks, abilities, REST, WP-CLI, data and limits |
+| [Reference](docs/REFERENCE.md) | How a call is checked, runaway protection and forecast, try your rules, callers, data rules, budgets and costs, usage per user and role, hooks, JS hooks, abilities, REST, WP-CLI, data and limits |
 | [Development](docs/DEVELOPMENT.md) | Local setup, commands and tests |
 | [Contributing](docs/CONTRIBUTING.md) | Pull requests, required checks and PR titles |
 | [Releasing](docs/RELEASING.md) | How merged pull requests become releases |
@@ -118,6 +120,7 @@ src/
 ├── Alerts.php           email and webhook alerts
 ├── Calls.php, Usage.php the log and the counters
 ├── Reports.php          usage and limits for screens, REST, abilities, CLI
+├── UserReport.php       usage per user and role, CSV rows
 ├── Abilities.php        abilities for agents
 ├── Rest/                routes for the screens
 ├── Admin/               Tools > AI Guard and Network Admin

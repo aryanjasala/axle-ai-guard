@@ -228,6 +228,31 @@ final class Calls {
 	}
 
 	/**
+	 * Calls, tokens and cost per user and currency in a time range.
+	 *
+	 * @param string $since UTC datetime, included.
+	 * @param string $until UTC datetime, excluded.
+	 * @param int    $limit Most groups to read.
+	 * @return array<int, array<string, mixed>> user_id, currency, calls (all, blocked included), blocked, tokens, cost, last_call.
+	 */
+	public function user_usage( string $since, string $until, int $limit = 1000 ): array {
+		global $wpdb;
+
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT user_id, currency, COUNT(*) AS calls, SUM(status = 'blocked') AS blocked, SUM(total_tokens) AS tokens, SUM(cost_micros) AS cost, MAX(started_at) AS last_call FROM %i WHERE started_at >= %s AND started_at < %s GROUP BY user_id, currency ORDER BY calls DESC LIMIT %d",
+				Schema::table( 'calls' ),
+				$since,
+				$until,
+				max( 1, $limit )
+			),
+			ARRAY_A
+		);
+
+		return is_array( $rows ) ? $rows : array();
+	}
+
+	/**
 	 * Error and total counts of finished calls since a time.
 	 *
 	 * @param string $since UTC datetime.

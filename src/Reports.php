@@ -141,6 +141,27 @@ final class Reports {
 	}
 
 	/**
+	 * Calls, tokens and cost per user and per role for a period.
+	 *
+	 * @param string $period today, 7d, 30d, month or last_month.
+	 * @return array<string, mixed> See UserReport::build().
+	 */
+	public function user_usage( string $period = 'month' ): array {
+		return ( new UserReport( $this->calls, $this->prices ) )->build( $period );
+	}
+
+	/**
+	 * A user report as CSV rows, header first.
+	 *
+	 * @param array  $report A report from user_usage().
+	 * @param string $by     user or role.
+	 * @return array<int, array<int, string>>
+	 */
+	public function user_usage_csv( array $report, string $by = 'user' ): array {
+		return ( new UserReport( $this->calls, $this->prices ) )->csv_rows( $report, $by );
+	}
+
+	/**
 	 * Models called in the last 30 days that have no price, so their calls show a cost of zero.
 	 *
 	 * @return array<int, array{provider: string, model: string, calls: int, tokens: int}>

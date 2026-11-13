@@ -1,5 +1,6 @@
-const { test, expect, wp, appPasswordClient } = require( './utils' );
-const { installFixtures, removeFixtures, reset, call, supported, direct } = require( './seed' );
+const fs = require( 'fs' );
+const { test, expect, wp, appPasswordClient, logInAs } = require( './utils' );
+const { installFixtures, removeFixtures, reset, call, supported, direct, seedPeople, removePeople } = require( './seed' );
 
 const SCREEN = '/wp-admin/tools.php?page=axle-ai-guard';
 
@@ -141,7 +142,7 @@ test.describe( 'Axle AI Guard', () => {
 			// No ability turns a switch back off.
 			const list = await agent.call( 'GET', '/wp-abilities/v1/abilities?category=axle-ai-guard&per_page=50' );
 			const names = list.body.map( ( ability ) => ability.name ).sort();
-			expect( names ).toEqual( [ 'axle-ai-guard/engage-kill-switch', 'axle-ai-guard/get-limits', 'axle-ai-guard/get-runaway-status', 'axle-ai-guard/get-usage', 'axle-ai-guard/list-calls', 'axle-ai-guard/test-data-rules' ] );
+			expect( names ).toEqual( [ 'axle-ai-guard/engage-kill-switch', 'axle-ai-guard/get-limits', 'axle-ai-guard/get-runaway-status', 'axle-ai-guard/get-usage', 'axle-ai-guard/get-user-usage', 'axle-ai-guard/list-calls', 'axle-ai-guard/test-data-rules' ] );
 		} finally {
 			await agent.dispose();
 		}
@@ -390,6 +391,70 @@ test.describe( 'Axle AI Guard', () => {
 		await expect( page.locator( '.aag-done' ).getByRole( 'button', { name: /Undo/ } ) ).toBeVisible();
 		expect( JSON.parse( await page.evaluate( () => window.sessionStorage.getItem( 'aagToggled' ) ) ) ).toMatchObject( { scope: 'plugin', subject: 'caller-a', on: true, changed: true } );
 		expect( option( 'axle_ai_guard_kill' ).plugin[ 'caller-a' ] ).toBeTruthy();
+	} );
+
+	test( 'usage per user and role adds up, downloads as CSV and stays behind the capability', async ( { page, browser } ) => {
+		const ids = await seedPeople();
+		try {
+			// 3 + 1 calls by people and one by a visitor, 1,800 micro-units each.
+			expect( callCount() ).toBe( 5 );
+
+			await page.goto( `${ SCREEN }&tab=people` );
+			await expect( page.locator( '.aag-tabs .nav-tab-active' ) ).toContainText( 'Users and roles' );
+			const editor = page.locator( '.aag-people-roles tr[data-role="editor"]' );
+			await expect( editor ).toContainText( '3' );
+			await expect( editor ).toContainText( 'USD 0.0054' );
+			await expect( page.locator( '.aag-people-roles tr[data-role="author"]' ) ).toContainText( 'USD 0.0018' );
+			await expect( page.locator( '.aag-people-roles tr[data-role="_none"]' ) ).toContainText( 'No user' );
+			const edna = page.locator( `.aag-people-users tr[data-user="${ ids.aag_edna }"]` );
+			await expect( edna ).toContainText( 'Edna Editor' );
+			await expect( edna ).toContainText( 'aag_edna' );
+			await expect( page.locator( '.aag-people-total' ) ).toContainText( '5 calls' );
+			expect( await page.content() ).not.toContain( 'aag_edna@example.com' );
+
+			// The CSV matches the database.
+			const [ download ] = await Promise.all( [ page.waitForEvent( 'download' ), page.getByRole( 'button', { name: 'Download users as CSV' } ).click() ] );
+			expect( download.suggestedFilename() ).toMatch( /^axle-ai-guard-users-month-\d{4}-\d{2}-\d{2}\.csv$/ );
+			const csv = fs.readFileSync( await download.path(), 'utf8' ).replace( /^\uFEFF/, '' ).trim().split( /\r?\n/ );
+			expect( csv[ 0 ] ).toBe( 'user_id,login,name,role,calls,blocked,tokens,currency,cost' );
+			expect( csv ).toContain( `${ ids.aag_edna },aag_edna,Edna Editor,editor,3,0,450,USD,0.0054` );
+			expect( csv.join( '\n' ) ).not.toContain( '@example.com' );
+			const [ roles ] = await Promise.all( [ page.waitForEvent( 'download' ), page.getByRole( 'button', { name: 'Download roles as CSV' } ).click() ] );
+			expect( fs.readFileSync( await roles.path(), 'utf8' ) ).toContain( 'editor,Editor,1,3,0,450,USD,0.0054' );
+
+			// The period changes the table.
+			await page.goto( `${ SCREEN }&tab=people&period=last_month` );
+			await expect( page.locator( '.aag-people-users' ) ).toHaveCount( 0 );
+			await expect( page.locator( '.axle-empty' ) ).toContainText( 'No AI calls in this period' );
+
+			// An agent with the capability reads it; an editor cannot.
+			const agent = await appPasswordClient( 'admin', 'AI Guard e2e agent' );
+			try {
+				const result = await agent.call( 'GET', '/wp-abilities/v1/abilities/axle-ai-guard/get-user-usage/run?input[by]=role' );
+				expect( result.status ).toBe( 200 );
+				expect( result.body.groups.find( ( group ) => 'editor' === group.role ).calls ).toBe( 3 );
+				expect( result.body.totals.calls ).toBe( 5 );
+			} finally {
+				await agent.dispose();
+			}
+			const editorSession = await logInAs( browser, 'aag_edna' );
+			try {
+				const denied = await editorSession.page.goto( `${ SCREEN }&tab=people` );
+				expect( denied.status() ).toBe( 403 );
+				const post = await editorSession.context.request.post( '/wp-admin/admin-post.php', { form: { action: 'axle_ai_guard_people_csv', period: 'month', by: 'user' } } );
+				expect( post.status() ).toBe( 403 );
+			} finally {
+				await editorSession.context.close();
+			}
+
+			// Erasing a person moves their calls to "No user".
+			wp( 'eval', '( new AryanX\\Axle\\AiGuard\\Privacy( new AryanX\\Axle\\AiGuard\\Calls() ) )->erase( "aag_edna@example.com" );' );
+			const after = JSON.parse( wp( 'axle-ai-guard', 'user-usage', '--by=role', '--format=json' ) );
+			expect( after.find( ( row ) => 'editor' === row.role ) ).toBeUndefined();
+			expect( after.find( ( row ) => '_none' === row.role ).calls ).toBe( '4' );
+		} finally {
+			removePeople();
+		}
 	} );
 
 	test( 'personal data export and erase cover AI calls', async () => {

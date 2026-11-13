@@ -32,6 +32,12 @@ Part of Axle by AryanX, a family of plugins for running WordPress sites safely.
 * Rate limits per plugin (60 calls a minute), per logged-in user (20), per visitor IP address (5, so a chatbot or a form cannot become a free AI proxy) and for the site (120).
 * Allowed contexts (front end, wp-admin, REST, Ajax, cron, WP-CLI), providers, models and roles, per plugin or for the site.
 
+**Usage per user and role:**
+
+* Users and roles shows who triggered the AI calls, with calls, blocked calls, tokens and cost, for today, the last 7 or 30 days, this month or last month.
+* Cost is listed per currency. Each user counts under their first role, so the role totals add up to the site total.
+* Download it as CSV. The file has login names and no email addresses. Only people with the AI Guard capability can see or download it.
+
 **Kill switches:**
 
 * For the whole site, one plugin, one provider or one context, from the screen, WP-CLI, an ability or the `AXLE_AI_GUARD_KILL` constant in wp-config.php. On multisite, a network switch.
@@ -72,7 +78,7 @@ The checks that need no model (kill switches, approvals, contexts, roles, used-u
 
 * `wp axle-ai-guard usage [--period=day|month] [--by=plugin|provider|model|user]` and `calls`, `call <id>` read the log.
 * `wp axle-ai-guard kill [--plugin=<caller>] [--provider=<id>] [--context=<context>]` and `resume [--all]` work the switches.
-* `wp axle-ai-guard budget set global --monthly-cost=50`, `limit set plugin:<caller> --per-minute=10`, `rules list|set|test`, `runaway status|resume`, `prices list|set|reset|undo|export|import|missing|recalc`, `callers`, `approve`, `deny`, `settings` and `prune` cover the rest.
+* `wp axle-ai-guard budget set global --monthly-cost=50`, `limit set plugin:<caller> --per-minute=10`, `rules list|set|test`, `runaway status|resume`, `user-usage [--period=<period>] [--by=user|role]`, `prices list|set|reset|undo|export|import|missing|recalc`, `callers`, `approve`, `deny`, `settings` and `prune` cover the rest.
 
 = For developers =
 
@@ -80,7 +86,7 @@ Every default, limit, list and message has a filter, and every call, block, reda
 
 = Privacy =
 
-The log stores user IDs, and for visitors who are not logged in an anonymised IP address. Prompt text is not stored unless you turn on previews or the prompt store, and stored text has every detector finding redacted. Calls are kept for 90 days, usage totals for 400 days and stored prompts for 7 days. The plugin takes part in Tools > Export Personal Data and Tools > Erase Personal Data, and adds suggested text to Settings > Privacy.
+The log stores user IDs, and for visitors who are not logged in an anonymised IP address. Prompt text is not stored unless you turn on previews or the prompt store, and stored text has every detector finding redacted. Calls are kept for 90 days, usage totals for 400 days and stored prompts for 7 days. The plugin takes part in Tools > Export Personal Data and Tools > Erase Personal Data, and adds suggested text to Settings > Privacy. The Users and roles report reads the log, so someone who is erased moves to the No user row.
 
 == External services ==
 

@@ -169,6 +169,46 @@ final class Abilities implements Service {
 		);
 
 		$this->ability(
+			'get-user-usage',
+			__( 'Get AI usage per user and role', 'axle-ai-guard' ),
+			__( 'Calls, tokens and estimated cost per user and per role for today, the last 7 or 30 days, this month or last month. Each user counts under their first role. Costs are micro-units, listed per currency (1,000,000 = 1 unit). Login names are included, email addresses are not.', 'axle-ai-guard' ),
+			array(
+				'type'                 => 'object',
+				'properties'           => array(
+					'period' => array(
+						'type'    => 'string',
+						'enum'    => array( 'today', '7d', '30d', 'month', 'last_month' ),
+						'default' => 'month',
+					),
+					'by'     => array(
+						'type'    => 'string',
+						'enum'    => array( 'user', 'role' ),
+						'default' => 'user',
+					),
+				),
+				'additionalProperties' => false,
+				'default'              => array(),
+			),
+			array(
+				'type'       => 'object',
+				'properties' => array(
+					'period'    => array( 'type' => 'string' ),
+					'since'     => array( 'type' => 'string' ),
+					'until'     => array( 'type' => 'string' ),
+					'currency'  => array( 'type' => 'string' ),
+					'truncated' => array( 'type' => 'boolean' ),
+					'totals'    => array( 'type' => 'object' ),
+					'groups'    => array(
+						'type'  => 'array',
+						'items' => array( 'type' => 'object' ),
+					),
+				),
+			),
+			array( $this, 'get_user_usage' ),
+			$readonly
+		);
+
+		$this->ability(
 			'list-calls',
 			__( 'List AI calls', 'axle-ai-guard' ),
 			__( 'Logged AI calls, newest first, with caller, provider, model, tokens, cost, status and what data each call carried (counts, never the text). Previews are only included when asked for and stored.', 'axle-ai-guard' ),
@@ -344,6 +384,28 @@ final class Abilities implements Service {
 			'currency' => $this->reports->limits()['currency'],
 			'total'    => array( 'name' => 'global' ) + $this->reports->totals( $period ),
 			'groups'   => $this->reports->usage( $period, (string) ( $input['by'] ?? 'plugin' ) ),
+		);
+	}
+
+	/**
+	 * Ability: usage per user or role.
+	 *
+	 * @param array|null $input Input.
+	 * @return array
+	 */
+	public function get_user_usage( $input = null ): array {
+		$input  = (array) $input;
+		$report = $this->reports->user_usage( (string) ( $input['period'] ?? 'month' ) );
+		$by     = 'role' === ( $input['by'] ?? '' ) ? 'roles' : 'users';
+
+		return array(
+			'period'    => $report['period'],
+			'since'     => $report['since'],
+			'until'     => $report['until'],
+			'currency'  => $report['currency'],
+			'truncated' => $report['truncated'],
+			'totals'    => $report['totals'],
+			'groups'    => $report[ $by ],
 		);
 	}
 
