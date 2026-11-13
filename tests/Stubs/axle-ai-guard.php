@@ -110,6 +110,18 @@ class Aag_Fake_Wpdb {
 
 	public function query( $query ) {
 		$sql = is_array( $query ) ? $query['sql'] : (string) $query;
+		if ( 0 === strpos( $sql, 'INSERT INTO %i (period, subject, calls, tokens, cost_micros) VALUES' ) ) {
+			list( , $period, $subject, $cost ) = $query['args'];
+			$key = $period . '|' . $subject;
+			if ( isset( $this->usage[ $key ] ) ) {
+				++$this->usage[ $key ]['calls'];
+				$this->usage[ $key ]['cost_micros'] += $cost;
+				$this->insert_id = $this->usage[ $key ]['calls'];
+			} else {
+				$this->usage[ $key ] = array( 'calls' => 1, 'tokens' => 0, 'cost_micros' => $cost, 'blocked' => 0 );
+			}
+			return 1;
+		}
 		if ( 0 === strpos( $sql, 'INSERT INTO %i (period' ) ) {
 			list( , $period, $subject, $calls, $tokens, $cost, $blocked, , , $delta ) = $query['args'];
 			$key = $period . '|' . $subject;
@@ -160,6 +172,21 @@ class Aag_Fake_Wpdb {
 	}
 
 	public function get_results( $query, $output = null ) {
+		$sql = is_array( $query ) ? $query['sql'] : (string) $query;
+		if ( 0 === strpos( $sql, 'SELECT period, calls, tokens, cost_micros FROM %i WHERE subject' ) ) {
+			list( , $subject, $from, $to ) = $query['args'];
+			$rows = array();
+			foreach ( $this->usage as $key => $row ) {
+				list( $period, $name ) = explode( '|', $key, 2 );
+				if ( $name === $subject && $period >= $from && $period <= $to ) {
+					$rows[] = array( 'period' => $period ) + $row;
+				}
+			}
+			usort( $rows, static function ( $a, $b ) {
+				return strcmp( $a['period'], $b['period'] );
+			} );
+			return $rows;
+		}
 		$this->queries[] = $query;
 		return $this->next_results;
 	}

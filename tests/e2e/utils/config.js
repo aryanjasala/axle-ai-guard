@@ -12,5 +12,5 @@ module.exports = {
 	// This plugin's own Docker site by default. A shared site can be used by pointing WP_COMPOSE_DIR at its compose folder.
 	COMPOSE_DIR: process.env.WP_COMPOSE_DIR || path.join( __dirname, '..', 'env' ),
 	// Options the plugin stores, cleared before each run.
-	OPTIONS: ['axle_ai_guard_settings', 'axle_ai_guard_policies', 'axle_ai_guard_rules', 'axle_ai_guard_prices', 'axle_ai_guard_kill', 'axle_ai_guard_seen_callers'],
+	OPTIONS: ['axle_ai_guard_settings', 'axle_ai_guard_policies', 'axle_ai_guard_rules', 'axle_ai_guard_prices', 'axle_ai_guard_kill', 'axle_ai_guard_seen_callers', 'axle_ai_guard_prices_undo', 'axle_ai_guard_runaway'],
 };

@@ -15,7 +15,7 @@ defined( 'ABSPATH' ) || exit;
  */
 final class Alerts {
 
-	public const TYPES = array( 'budget_soft', 'budget_hard', 'kill_on', 'kill_off', 'data_block', 'new_caller', 'error_spike' );
+	public const TYPES = array( 'budget_soft', 'budget_hard', 'kill_on', 'kill_off', 'data_block', 'new_caller', 'error_spike', 'runaway', 'forecast' );
 
 	/**
 	 * Settings.

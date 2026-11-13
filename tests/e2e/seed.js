@@ -9,6 +9,8 @@ const OPTIONS = [
 	'axle_ai_guard_prices',
 	'axle_ai_guard_kill',
 	'axle_ai_guard_seen_callers',
+	'axle_ai_guard_runaway',
+	'axle_ai_guard_prices_undo',
 	'aag_fixture_bodies',
 	'aag_fixture_fail',
 	'aag_fixture_mail',
@@ -137,9 +139,25 @@ function killChat() {
 	wp( 'axle-ai-guard', 'kill', '--plugin=chat-assistant', '--reason=Loop on the contact page' );
 }
 
+/** Calls made while their model has no price, so they show a cost of zero. */
+async function seedUnpriced() {
+	installFixtures();
+	reset();
+	wp( 'option', 'delete', 'axle_ai_guard_prices' );
+	await call( 'caller-a', 'Suggest three blog post titles.' );
+}
+
+/** A runaway caller waiting on the screen: alert-only mode, so nothing is paused. */
+async function seedRunaway() {
+	wp( 'axle-ai-guard', 'settings', 'set', 'runaway_min_calls', '10' );
+	for ( let i = 0; i < 10; i++ ) {
+		await call( 'caller-b', 'Another call.' );
+	}
+}
+
 /** Back to a clean site. */
 function unseed() {
 	reset();
 }
 
-module.exports = { installFixtures, removeFixtures, reset, call, supported, direct, seedActivity, killChat, unseed, OPTIONS };
+module.exports = { installFixtures, removeFixtures, reset, call, supported, direct, seedActivity, seedRunaway, seedUnpriced, killChat, unseed, OPTIONS };

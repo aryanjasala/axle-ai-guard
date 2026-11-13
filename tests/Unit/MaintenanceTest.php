@@ -46,7 +46,7 @@ final class MaintenanceTest extends GuardTestCase {
 				return is_array( $query ) && 0 === strpos( $query['sql'], 'DELETE' );
 			}
 		);
-		$this->assertCount( 5, $deletes );
+		$this->assertCount( 6, $deletes );
 		foreach ( $deletes as $query ) {
 			$this->assertContains( end( $query['args'] ), array( Cleanup::BATCH, Cleanup::BATCH * Cleanup::MAX_BATCHES ) );
 		}
@@ -71,7 +71,7 @@ final class MaintenanceTest extends GuardTestCase {
 		$this->usage->add( array( 'global' ), 1, 1500, 250 );
 
 		$summary = $this->cleanup->recalculate( 30 );
-		$this->assertSame( array( 'rows' => 1, 'changed' => 1, 'delta' => 1000 ), $summary );
+		$this->assertSame( array( 'rows' => 1, 'changed' => 1, 'delta' => 1000, 'complete' => true, 'next' => 0 ), $summary );
 		$this->assertSame( 1250, $this->db->calls[1]['cost_micros'] );
 		$this->assertSame( 1250, $this->db->usage[ Usage::periods()['month'] . '|global' ]['cost_micros'] );
 	}

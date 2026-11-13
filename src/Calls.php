@@ -265,6 +265,37 @@ final class Calls {
 	}
 
 	/**
+	 * Successful calls that cost nothing although they used tokens, grouped by model.
+	 *
+	 * @param string $since UTC datetime.
+	 * @return array<int, array{provider: string, model: string, calls: int, tokens: int}>
+	 */
+	public function unpriced( string $since ): array {
+		global $wpdb;
+
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT provider, model, COUNT(*) AS calls, SUM(total_tokens) AS tokens FROM %i WHERE status = 'ok' AND started_at >= %s AND total_tokens > 0 AND cost_micros = 0 AND model <> '' GROUP BY provider, model ORDER BY calls DESC LIMIT 100",
+				Schema::table( 'calls' ),
+				$since
+			),
+			ARRAY_A
+		);
+		$out  = array();
+
+		foreach ( is_array( $rows ) ? $rows : array() as $row ) {
+			$out[] = array(
+				'provider' => (string) $row['provider'],
+				'model'    => (string) $row['model'],
+				'calls'    => (int) $row['calls'],
+				'tokens'   => (int) $row['tokens'],
+			);
+		}
+
+		return $out;
+	}
+
+	/**
 	 * Successful calls since a time, for recalculating costs.
 	 *
 	 * @param string $since  UTC datetime.
