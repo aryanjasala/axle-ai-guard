@@ -40,12 +40,12 @@ final class RegistrationTest extends GuardTestCase {
 				$registered[ $name ] = $args;
 			}
 		);
-		$abilities = new Abilities( $this->reports, $this->kill, $this->calls, $this->runaway, $this->forecast );
+		$abilities = new Abilities( $this->reports, $this->kill, $this->calls, $this->runaway, $this->forecast, new \AryanX\Axle\AiGuard\Requests( new \AryanX\Axle\AiGuard\Allowance(), $this->alerts ) );
 		$abilities->register();
 		$this->assertSame( 10, has_action( 'wp_abilities_api_init', array( $abilities, 'register_abilities' ) ) );
 		$abilities->register_abilities();
 
-		$this->assertSame( array( 'axle-ai-guard/get-usage', 'axle-ai-guard/get-user-usage', 'axle-ai-guard/list-calls', 'axle-ai-guard/get-limits', 'axle-ai-guard/engage-kill-switch', 'axle-ai-guard/test-data-rules', 'axle-ai-guard/get-runaway-status' ), array_keys( $registered ) );
+		$this->assertSame( array( 'axle-ai-guard/get-usage', 'axle-ai-guard/get-user-usage', 'axle-ai-guard/list-calls', 'axle-ai-guard/get-limits', 'axle-ai-guard/engage-kill-switch', 'axle-ai-guard/test-data-rules', 'axle-ai-guard/get-runaway-status', 'axle-ai-guard/list-access-requests' ), array_keys( $registered ) );
 		foreach ( $registered as $name => $args ) {
 			$readonly = 'axle-ai-guard/engage-kill-switch' !== $name;
 			$this->assertSame( $readonly, $args['meta']['annotations']['readonly'], $name );
@@ -55,7 +55,7 @@ final class RegistrationTest extends GuardTestCase {
 	}
 
 	public function test_the_kill_switch_ability_only_turns_switches_on(): void {
-		$abilities = new Abilities( $this->reports, $this->kill, $this->calls, $this->runaway, $this->forecast );
+		$abilities = new Abilities( $this->reports, $this->kill, $this->calls, $this->runaway, $this->forecast, new \AryanX\Axle\AiGuard\Requests( new \AryanX\Axle\AiGuard\Allowance(), $this->alerts ) );
 		$result    = $abilities->engage_kill_switch(
 			array(
 				'scope'   => 'plugin',
@@ -72,7 +72,7 @@ final class RegistrationTest extends GuardTestCase {
 	}
 
 	public function test_ability_reads(): void {
-		$abilities = new Abilities( $this->reports, $this->kill, $this->calls, $this->runaway, $this->forecast );
+		$abilities = new Abilities( $this->reports, $this->kill, $this->calls, $this->runaway, $this->forecast, new \AryanX\Axle\AiGuard\Requests( new \AryanX\Axle\AiGuard\Allowance(), $this->alerts ) );
 		$this->usage->add( array( 'global', 'plugin:caller-a' ), 2, 300, 1800 );
 		$this->db->next_results = array(
 			array(
@@ -91,7 +91,7 @@ final class RegistrationTest extends GuardTestCase {
 	}
 
 	public function test_rest_routes_and_kill(): void {
-		$controller = new Controller( $this->reports, $this->kill, $this->calls, $this->runaway, $this->prices );
+		$controller = new Controller( $this->reports, $this->kill, $this->calls, $this->runaway, $this->prices, new \AryanX\Axle\AiGuard\Requests( new \AryanX\Axle\AiGuard\Allowance(), $this->alerts ) );
 		$routes     = array();
 		Functions\when( 'register_rest_route' )->alias(
 			static function ( $ns, $route ) use ( &$routes ) {
@@ -99,7 +99,20 @@ final class RegistrationTest extends GuardTestCase {
 			}
 		);
 		$controller->routes();
-		$this->assertSame( array( 'axle-ai-guard/v1/calls', 'axle-ai-guard/v1/calls/(?P<id>\d+)', 'axle-ai-guard/v1/kill', 'axle-ai-guard/v1/rules/test', 'axle-ai-guard/v1/runaway', 'axle-ai-guard/v1/prices' ), $routes );
+		$this->assertSame(
+			array(
+				'axle-ai-guard/v1/calls',
+				'axle-ai-guard/v1/calls/(?P<id>\d+)',
+				'axle-ai-guard/v1/kill',
+				'axle-ai-guard/v1/rules/test',
+				'axle-ai-guard/v1/runaway',
+				'axle-ai-guard/v1/access-requests',
+				'axle-ai-guard/v1/access-requests/(?P<id>[a-f0-9]{12})/(?P<do>allow|undo|dismiss)',
+				'axle-ai-guard/v1/allowances/(?P<user>\d+)',
+				'axle-ai-guard/v1/prices',
+			),
+			$routes
+		);
 
 		Functions\when( 'rest_ensure_response' )->returnArg();
 		$request = new class() {

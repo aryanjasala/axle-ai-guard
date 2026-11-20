@@ -14,7 +14,7 @@ function axle_ai_guard_uninstall_site(): void {
 	global $wpdb;
 
 	wp_clear_scheduled_hook( 'axle_ai_guard_cleanup' );
-	foreach ( array( 'settings', 'policies', 'rules', 'prices', 'prices_undo', 'kill', 'runaway', 'seen_callers', 'db_version' ) as $axle_ai_guard_option ) {
+	foreach ( array( 'settings', 'policies', 'rules', 'prices', 'prices_undo', 'kill', 'runaway', 'seen_callers', 'requests', 'db_version' ) as $axle_ai_guard_option ) {
 		delete_option( 'axle_ai_guard_' . $axle_ai_guard_option );
 	}
 

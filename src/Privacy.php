@@ -28,12 +28,39 @@ final class Privacy implements Service {
 	private Calls $calls;
 
 	/**
+	 * Usage counters.
+	 *
+	 * @var Usage
+	 */
+	private Usage $usage;
+
+	/**
+	 * Requests for more AI.
+	 *
+	 * @var Requests
+	 */
+	private Requests $requests;
+
+	/**
+	 * Allowances.
+	 *
+	 * @var Allowance
+	 */
+	private Allowance $allowance;
+
+	/**
 	 * Sets up the privacy tools.
 	 *
-	 * @param Calls $calls The call log.
+	 * @param Calls          $calls     The call log.
+	 * @param Usage|null     $usage     Usage counters, or new ones.
+	 * @param Requests|null  $requests  Requests for more AI, or new ones.
+	 * @param Allowance|null $allowance Allowances, or new ones.
 	 */
-	public function __construct( Calls $calls ) {
-		$this->calls = $calls;
+	public function __construct( Calls $calls, ?Usage $usage = null, ?Requests $requests = null, ?Allowance $allowance = null ) {
+		$this->calls     = $calls;
+		$this->usage     = $usage ?? new Usage();
+		$this->allowance = $allowance ?? new Allowance();
+		$this->requests  = $requests ?? new Requests( $this->allowance, new Alerts( new Settings() ) );
 	}
 
 	/**
@@ -95,6 +122,33 @@ final class Privacy implements Service {
 		}
 
 		$rows = $this->calls->for_user( (int) $user->ID, max( 1, (int) $page ), self::PER );
+		if ( 1 === max( 1, (int) $page ) ) {
+			foreach ( $this->requests->for_user( (int) $user->ID ) as $request ) {
+				$data[] = array(
+					'group_id'    => 'axle-ai-guard-requests',
+					'group_label' => __( 'Requests for more AI', 'axle-ai-guard' ),
+					'item_id'     => 'axle-ai-guard-request-' . (string) $request['id'],
+					'data'        => array(
+						array(
+							'name'  => __( 'Time (UTC)', 'axle-ai-guard' ),
+							'value' => gmdate( 'Y-m-d H:i:s', (int) $request['at'] ),
+						),
+						array(
+							'name'  => __( 'Rule', 'axle-ai-guard' ),
+							'value' => (string) $request['rule'],
+						),
+						array(
+							'name'  => __( 'Caller', 'axle-ai-guard' ),
+							'value' => (string) $request['caller'],
+						),
+						array(
+							'name'  => __( 'Status', 'axle-ai-guard' ),
+							'value' => (string) $request['status'],
+						),
+					),
+				);
+			}
+		}
 		foreach ( $rows as $row ) {
 			$fields = array(
 				__( 'Time (UTC)', 'axle-ai-guard' ) => (string) $row['started_at'],
@@ -138,11 +192,19 @@ final class Privacy implements Service {
 		unset( $page );
 		$user    = get_user_by( 'email', (string) $email );
 		$changed = $user ? $this->calls->erase_user( (int) $user->ID, self::PER ) : 0;
+		$removed = 0;
+
+		if ( $user && $changed < self::PER ) {
+			// The last batch of calls: the person's own counters, grants and requests go too.
+			$removed  = $this->usage->erase_user( (int) $user->ID );
+			$removed += $this->requests->erase_user( (int) $user->ID );
+			$this->allowance->erase( (int) $user->ID );
+		}
 
 		return array(
-			'items_removed'  => $changed > 0,
+			'items_removed'  => $changed > 0 || $removed > 0,
 			'items_retained' => $changed > 0,
-			'messages'       => $changed > 0 ? array( __( 'AI calls were kept without the user, IP address, preview or stored prompt, so usage totals stay correct.', 'axle-ai-guard' ) ) : array(),
+			'messages'       => $changed > 0 ? array( __( 'AI calls were kept without the user, IP address, preview or stored prompt, so usage totals stay correct. The person\'s own usage counters and requests for more AI were deleted.', 'axle-ai-guard' ) ) : array(),
 			'done'           => $changed < self::PER,
 		);
 	}
@@ -157,7 +219,7 @@ final class Privacy implements Service {
 
 		wp_add_privacy_policy_content(
 			__( 'Axle AI Guard', 'axle-ai-guard' ),
-			'<p>' . esc_html__( 'This site logs the AI calls its plugins make: when, which plugin, the provider and model, token counts and cost, the user ID of the logged-in user who triggered the call, and for visitors who are not logged in an anonymised IP address. The text of prompts is not stored unless an administrator turns on previews or the prompt store; stored text has personal data such as user email addresses removed. Call records are kept for 90 days, stored prompts for 7 days.', 'axle-ai-guard' ) . '</p>'
+			'<p>' . esc_html__( 'This site logs the AI calls its plugins make: when, which plugin, the provider and model, token counts and cost, the user ID of the logged-in user who triggered the call, and for visitors who are not logged in an anonymised IP address. When a signed-in person asks for more AI after a block, the request (who, which rule, which plugin, when) is kept for 30 days. The text of prompts is not stored unless an administrator turns on previews or the prompt store; stored text has personal data such as user email addresses removed. Call records are kept for 90 days, stored prompts for 7 days.', 'axle-ai-guard' ) . '</p>'
 		);
 	}
 }

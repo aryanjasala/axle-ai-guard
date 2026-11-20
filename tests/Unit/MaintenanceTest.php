@@ -46,7 +46,7 @@ final class MaintenanceTest extends GuardTestCase {
 				return is_array( $query ) && 0 === strpos( $query['sql'], 'DELETE' );
 			}
 		);
-		$this->assertCount( 6, $deletes );
+		$this->assertCount( 7, $deletes );
 		foreach ( $deletes as $query ) {
 			$this->assertContains( end( $query['args'] ), array( Cleanup::BATCH, Cleanup::BATCH * Cleanup::MAX_BATCHES ) );
 		}

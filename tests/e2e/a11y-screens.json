@@ -38,6 +38,25 @@
       "cleanup": [{ "js": "seed.js", "call": "unseed" }]
     },
     {
+      "name": "Overview, someone asked for more AI",
+      "setup": [{ "js": "seed.js", "call": "seedRequest" }],
+      "url": "/wp-admin/tools.php?page=axle-ai-guard",
+      "steps": [{ "waitFor": ".aag-request-table" }],
+      "cleanup": [{ "js": "seed.js", "call": "unseed" }]
+    },
+    {
+      "name": "Prices, a view inside the Settings tab",
+      "url": "/wp-admin/tools.php?page=axle-ai-guard&tab=prices",
+      "steps": [{ "waitFor": ".aag-views" }]
+    },
+    {
+      "name": "Admin bar node and notice while a runaway is flagged",
+      "setup": [{ "js": "seed.js", "call": "reset" }, ["axle-ai-guard", "settings", "set", "runaway_mode", "alert"], { "js": "seed.js", "call": "seedRunaway" }],
+      "url": "/wp-admin/index.php",
+      "include": ["#wp-admin-bar-axle-ai-guard", ".aag-runaway-notice"],
+      "cleanup": [{ "js": "seed.js", "call": "unseed" }]
+    },
+    {
       "name": "Admin bar node and notice while AI is off",
       "setup": [{ "js": "seed.js", "call": "reset" }, ["axle-ai-guard", "kill"]],
       "url": "/wp-admin/index.php",

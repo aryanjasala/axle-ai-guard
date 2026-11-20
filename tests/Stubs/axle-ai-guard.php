@@ -110,6 +110,42 @@ class Aag_Fake_Wpdb {
 
 	public function query( $query ) {
 		$sql = is_array( $query ) ? $query['sql'] : (string) $query;
+		if ( 0 === strpos( $sql, 'INSERT INTO %i (period, subject, calls, tokens, cost_micros, blocked) VALUES (%s, %s, 0, %d, 0, 0)' ) ) {
+			list( , $period, $subject, $tokens, $delta ) = $query['args'];
+			$key = $period . '|' . $subject;
+			if ( isset( $this->usage[ $key ] ) ) {
+				$this->usage[ $key ]['tokens'] = $this->usage[ $key ]['calls'] + $delta;
+			} else {
+				$this->usage[ $key ] = array( 'calls' => 0, 'tokens' => $tokens, 'cost_micros' => 0, 'blocked' => 0 );
+			}
+			return 1;
+		}
+		if ( 0 === strpos( $sql, 'UPDATE %i SET calls = calls + 1 WHERE period = %s AND subject = %s AND calls < tokens' ) ) {
+			$key = $query['args'][1] . '|' . $query['args'][2];
+			if ( isset( $this->usage[ $key ] ) && $this->usage[ $key ]['calls'] < $this->usage[ $key ]['tokens'] ) {
+				++$this->usage[ $key ]['calls'];
+				return 1;
+			}
+			return 0;
+		}
+		if ( 0 === strpos( $sql, 'UPDATE %i SET tokens = calls WHERE period = %s AND subject = %s' ) ) {
+			$key = $query['args'][1] . '|' . $query['args'][2];
+			if ( isset( $this->usage[ $key ] ) ) {
+				$this->usage[ $key ]['tokens'] = $this->usage[ $key ]['calls'];
+				return 1;
+			}
+			return 0;
+		}
+		if ( 0 === strpos( $sql, 'DELETE FROM %i WHERE subject = %s' ) ) {
+			$gone = 0;
+			foreach ( array_keys( $this->usage ) as $key ) {
+				if ( substr( $key, -strlen( '|' . $query['args'][1] ) ) === '|' . $query['args'][1] ) {
+					unset( $this->usage[ $key ] );
+					++$gone;
+				}
+			}
+			return $gone;
+		}
 		if ( 0 === strpos( $sql, 'INSERT INTO %i (period, subject, calls, tokens, cost_micros) VALUES' ) ) {
 			list( , $period, $subject, $cost ) = $query['args'];
 			$key = $period . '|' . $subject;
@@ -185,6 +221,16 @@ class Aag_Fake_Wpdb {
 			usort( $rows, static function ( $a, $b ) {
 				return strcmp( $a['period'], $b['period'] );
 			} );
+			return $rows;
+		}
+		if ( 0 === strpos( $sql, 'SELECT subject, calls, tokens FROM %i WHERE period = %s AND subject LIKE' ) ) {
+			$rows = array();
+			foreach ( $this->usage as $key => $row ) {
+				list( $period, $name ) = explode( '|', $key, 2 );
+				if ( $period === $query['args'][1] && 0 === strpos( $name, 'allow:' ) && $row['tokens'] > $row['calls'] ) {
+					$rows[] = array( 'subject' => $name, 'calls' => $row['calls'], 'tokens' => $row['tokens'] );
+				}
+			}
 			return $rows;
 		}
 		$this->queries[] = $query;

@@ -14,8 +14,8 @@ defined( 'ABSPATH' ) || exit;
 /**
  * One row per period and subject. Periods are d:2026-10-30, m:2026-10 and,
  * for rate limits without a persistent object cache, n:202610301405 (a
- * minute) and h:2026103014 (an hour, for the runaway guard). Subjects are global, plugin:<caller>, provider:<id>, user:<id>
- * and ip:<hash>. Counters only grow through INSERT ... ON DUPLICATE KEY
+ * minute) and h:2026103014 (an hour, for the runaway guard). Subjects are global, plugin:<caller>, provider:<id>, user:<id>,
+ * ip:<hash> and allow:<id> (a person's grant for a day, period g:2026-10-30; see Allowance). Counters only grow through INSERT ... ON DUPLICATE KEY
  * UPDATE x = x + n, so parallel requests never lose a count.
  */
 final class Usage {
@@ -244,6 +244,19 @@ final class Usage {
 	}
 
 	/**
+	 * Deletes every counter row of one person (user:<id>, in every period), for the privacy eraser.
+	 * The site, plugin and provider totals keep their numbers.
+	 *
+	 * @param int $user_id User.
+	 * @return int Rows deleted.
+	 */
+	public function erase_user( int $user_id ): int {
+		global $wpdb;
+
+		return (int) $wpdb->query( $wpdb->prepare( 'DELETE FROM %i WHERE subject = %s', Schema::table( 'usage' ), 'user:' . $user_id ) );
+	}
+
+	/**
 	 * Deletes counter rows older than the retention, and minute buckets older than an hour.
 	 *
 	 * @param int $days  Days to keep day and month rows.
@@ -259,6 +272,7 @@ final class Usage {
 
 		$deleted += (int) $wpdb->query( $wpdb->prepare( 'DELETE FROM %i WHERE period LIKE %s AND period < %s LIMIT %d', $table, 'n:%', 'n:' . gmdate( 'YmdHi', time() - HOUR_IN_SECONDS ), $limit ) );
 		$deleted += (int) $wpdb->query( $wpdb->prepare( 'DELETE FROM %i WHERE period LIKE %s AND period < %s LIMIT %d', $table, 'h:%', 'h:' . gmdate( 'YmdH', time() - ( self::HOUR_DAYS + 1 ) * DAY_IN_SECONDS ), $limit ) );
+		$deleted += (int) $wpdb->query( $wpdb->prepare( 'DELETE FROM %i WHERE period LIKE %s AND period < %s LIMIT %d', $table, 'g:%', 'g:' . gmdate( 'Y-m-d', time() - DAY_IN_SECONDS ), $limit ) );
 		$deleted += (int) $wpdb->query( $wpdb->prepare( 'DELETE FROM %i WHERE period LIKE %s AND period < %s LIMIT %d', $table, 'd:%', 'd:' . gmdate( 'Y-m-d', $cutoff ), $limit ) );
 		$deleted += (int) $wpdb->query( $wpdb->prepare( 'DELETE FROM %i WHERE period LIKE %s AND period < %s LIMIT %d', $table, 'm:%', 'm:' . gmdate( 'Y-m', $cutoff ), $limit ) );
 

@@ -95,6 +95,15 @@ Redaction rewrites the JSON body for three formats: OpenAI (`messages[].content`
 | `axle_ai_guard_redact_placeholder` | `( string $placeholder, string $detector )` | Default `[redacted:<detector>]` |
 | `axle_ai_guard_provider_body_rewriters` | `( array $rewriters )` | Callables `( array $body, callable $redact ): ?array`, one per body format |
 | `axle_ai_guard_provider_hosts` | `( array $hosts )` | Provider id keyed by host, or host and path prefix, for direct-call monitoring |
+| `axle_ai_guard_visitor_ip` | `( string $ip, string $context )` | The visitor's address before it is anonymised for the per-visitor limit. Empty skips the limit |
+| `axle_ai_guard_ip_header` | `( string $header )` | `$_SERVER` key of the header that carries the real client address. Default the `AXLE_AI_GUARD_IP_HEADER` constant, else none |
+| `axle_ai_guard_trusted_proxies` | `( string[] $proxies )` | Addresses or CIDR ranges allowed to set that header. Default the `AXLE_AI_GUARD_TRUSTED_PROXIES` constant |
+| `axle_ai_guard_allowance_calls` | `( int $calls, int $asked )` | Calls "Allow for today" gives. Default 20, between 1 and 1000 |
+| `axle_ai_guard_allowance_rules` | `( string[] $rules )` | Rules a grant may pass. Never kill, caller, files or data |
+| `axle_ai_guard_wall` | `( array $wall, string $rule, array $caller, array $row )` | The wall data a blocked person gets. Empty shows nothing |
+| `axle_ai_guard_wall_message` | `( string $text, string $rule )` | The plain-words reason. Keep it free of amounts |
+| `axle_ai_guard_wall_enabled` | `( bool $load )` | Whether the wall script loads for the person |
+| `axle_ai_guard_request_retention_days` | `( int $days )` | Days requests for more AI are kept. Default 30 |
 | `axle_ai_guard_block_in_before_event` | `( bool $block, array $call )` | `false` lets calls that would be blocked in the before event go ahead, with block-mode data redacted |
 | `axle_ai_guard_block_message` | `( string $message, string $rule, array $call )` | What a blocked caller is told |
 | `axle_ai_guard_new_caller_default` | `( string $mode, array $caller )` | allow, alert or deny for a caller seen for the first time |
@@ -128,6 +137,10 @@ Redaction rewrites the JSON body for three formats: OpenAI (`messages[].content`
 
 | Hook | Arguments | When |
 | --- | --- | --- |
+| `axle_ai_guard_access_requested` | `( array $request )` | A blocked person asked for more AI |
+| `axle_ai_guard_allowance_granted` | `( int $user_id, int $calls, int $by, array $request )` | An admin allowed a person for today |
+| `axle_ai_guard_allowance_used` | `( int $user_id, string $rule, int $left, array $call )` | A call went ahead on an allowance |
+| `axle_ai_guard_allowance_revoked` | `( int $user_id, int $left, int $by )` | An allowance was ended by hand |
 | `axle_ai_guard_call_started` | `( int $id, array $call )` | A call passed every rule and its row is open |
 | `axle_ai_guard_call_finished` | `( int $id, array $row, array $call )` | A call finished and was counted |
 | `axle_ai_guard_call_failed` | `( int $id, string $code, array $call )` | The provider answered with an error, the request failed, or the call never finished |
@@ -210,12 +223,13 @@ Category `axle-ai-guard`, all behind `axle_ai_guard_manage`, all listed for the 
 | `axle-ai-guard/engage-kill-switch` | idempotent | `scope` (global, plugin, provider, context), `subject`, `reason` | `{ scope, subject, changed, on }` |
 | `axle-ai-guard/test-data-rules` | readonly | `text`, `plugin`, `context` | Findings, the redacted text, whether it would be blocked, the outcome, the deciding rule and where each match is |
 | `axle-ai-guard/get-runaway-status` | readonly | none | Mode, each caller's hour against its baseline and limit, open events, month-end forecasts |
+| `axle-ai-guard/list-access-requests` | readonly | `status` (open, allowed, dismissed, all) | `requests` with person, rule, plugin, time, status |
 
-An agent can pause a runaway caller with the kill switch ability and read its status; only a person resumes it. There is no ability to turn a switch off, raise a budget or loosen a rule. Axle Read-Only Mode still allows the readonly ones during a freeze.
+An agent can pause a runaway caller with the kill switch ability and read its status; only a person resumes it. There is no ability to turn a switch off, raise a budget, loosen a rule or allow a person for today. Axle Read-Only Mode still allows the readonly ones during a freeze.
 
 ## REST API
 
-Routes under `axle-ai-guard/v1`, for the screens, behind the same capability: `GET /calls` (`status`, `plugin`, `provider`, `page`), `GET /calls/<id>` (with the preview and stored prompt), `POST /kill` (`scope`, `subject`, `on`, `reason`), `POST /rules/test` (`text`, `plugin`, `context`), `GET /runaway` and `GET /prices` (the export file).
+Routes under `axle-ai-guard/v1`, for the screens, behind the same capability: `GET /calls` (`status`, `plugin`, `provider`, `page`), `GET /calls/<id>` (with the preview and stored prompt), `POST /kill` (`scope`, `subject`, `on`, `reason`), `POST /rules/test` (`text`, `plugin`, `context`), `GET /runaway`, `GET /prices` (the export file), `POST /access-requests` (any signed-in person who was just blocked), `GET /access-requests`, `POST /access-requests/<id>/allow|undo|dismiss` and `DELETE /allowances/<user>`.
 
 ## WP-CLI
 

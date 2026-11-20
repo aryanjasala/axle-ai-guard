@@ -142,7 +142,8 @@ test.describe( 'Axle AI Guard', () => {
 			// No ability turns a switch back off.
 			const list = await agent.call( 'GET', '/wp-abilities/v1/abilities?category=axle-ai-guard&per_page=50' );
 			const names = list.body.map( ( ability ) => ability.name ).sort();
-			expect( names ).toEqual( [ 'axle-ai-guard/engage-kill-switch', 'axle-ai-guard/get-limits', 'axle-ai-guard/get-runaway-status', 'axle-ai-guard/get-usage', 'axle-ai-guard/get-user-usage', 'axle-ai-guard/list-calls', 'axle-ai-guard/test-data-rules' ] );
+			expect( names ).toEqual( [ 'axle-ai-guard/engage-kill-switch', 'axle-ai-guard/get-limits', 'axle-ai-guard/get-runaway-status', 'axle-ai-guard/get-usage', 'axle-ai-guard/get-user-usage',
+				'axle-ai-guard/list-access-requests', 'axle-ai-guard/list-calls', 'axle-ai-guard/test-data-rules' ] );
 		} finally {
 			await agent.dispose();
 		}
@@ -400,7 +401,9 @@ test.describe( 'Axle AI Guard', () => {
 			expect( callCount() ).toBe( 5 );
 
 			await page.goto( `${ SCREEN }&tab=people` );
-			await expect( page.locator( '.aag-tabs .nav-tab-active' ) ).toContainText( 'Users and roles' );
+			await expect( page.locator( '.aag-tabs .nav-tab' ) ).toHaveCount( 4 );
+			await expect( page.locator( '.aag-tabs .nav-tab-active' ) ).toContainText( 'Calls' );
+			await expect( page.locator( '.aag-views .current' ) ).toContainText( 'Users and roles' );
 			const editor = page.locator( '.aag-people-roles tr[data-role="editor"]' );
 			await expect( editor ).toContainText( '3' );
 			await expect( editor ).toContainText( 'USD 0.0054' );

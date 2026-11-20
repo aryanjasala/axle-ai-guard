@@ -306,6 +306,11 @@ final class Guard implements Service {
 				$profile = $check['profile'];
 				$this->stop_if( $call, $block, $profile );
 
+				if ( $this->policy->overridden() ) {
+					// The person was allowed for today: say so in the call's details.
+					$profile['allowance'] = true;
+				}
+
 				$redact = array();
 				foreach ( $profile['actions'] as $id => $mode ) {
 					if ( 'redact' === $mode || ( 'block' === $mode && isset( $profile['not_blocked'] ) ) ) {
