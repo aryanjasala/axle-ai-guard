@@ -33,6 +33,7 @@ Since WordPress 7.0 any plugin can call an AI provider through the WordPress AI 
 
 ## Features
 
+- **Visitor address you control**: the per-visitor limit uses the connecting address, and reads a forwarded header only when your site names it (a constant or a filter), with an optional list of trusted proxies
 - **Runaway protection**: learns each plugin's normal calls per hour from the last 7 days. A plugin that makes ten times that, and at least 100 calls in an hour, is paused on its own (new installs) or flagged (existing installs), you get an alert, and one click resumes it, with or without raising its limit
 - **Month-end forecast**: at the pace of the last 7 days, the day each monthly budget runs out, for the site and each plugin, with one alert a month
 - **Data rules**: detectors for user emails, any email, phone numbers, IP addresses, card numbers (Luhn), password hashes, WordPress salts, connector API keys and your own strings or regexes. Each one off, log, redact or block. Redaction rewrites the request body for OpenAI, Anthropic and Google formats and keeps no map back. Try your rules: paste text and see each match marked and labelled, the outcome and the rule that decided, with nothing stored or sent
@@ -43,6 +44,7 @@ Since WordPress 7.0 any plugin can call an AI provider through the WordPress AI 
 - **What was sent and what it cost**: caller and the file it was traced to, context, user, provider, model, tokens, estimated cost, timing and HTTP status. A data profile instead of the prompt; previews and a redacted prompt store are opt-in
 - **Rules per plugin**: allowed contexts, providers, models and roles, file attachments, and approval for plugins making their first call
 - **Alerts** by email and webhook, throttled to one per event and subject an hour
+- **Tell the person, and let them ask for more**: when a signed-in person's call is blocked by a budget, rate limit or rule, the editor and wp-admin show why in plain words (no amounts, nobody else's usage) with an Ask for more button. You get the request on the Overview screen with one click, Allow for today, a set number of calls until the end of the day (UTC) that is spent with one atomic update, so a burst cannot use more than you gave. Undo ends it. Kill switches, plugin approval and data rules are never passed
 - **Abilities** for agents to read usage (also per user and role) and runaway status and pull the kill switch (none to turn it back on), full **WP-CLI**, Site Health checks, privacy export and erase
 
 ## Install
@@ -114,6 +116,9 @@ src/
 ├── Caller.php           who made a call, from the backtrace
 ├── Context.php          context, user and visitor IP
 ├── Policy.php           budgets, rate limits and rules
+├── Allowance.php        "Allow for today": atomic per-person grants
+├── Requests.php         requests for more AI
+├── Wall.php             the notice a blocked person sees
 ├── Detectors.php        data rules
 ├── Prices.php           the price table and costs
 ├── KillSwitch.php       kill switches and the toolbar node

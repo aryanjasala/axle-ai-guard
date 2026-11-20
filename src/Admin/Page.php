@@ -1,12 +1,13 @@
 <?php
 /**
- * Tools > AI Guard: overview, calls, budgets, data rules, prices and settings.
+ * Tools > AI Guard: overview, calls, limits and rules, and settings.
  *
  * @package AryanX\Axle\AiGuard
  */
 
 namespace AryanX\Axle\AiGuard\Admin;
 
+use AryanX\Axle\AiGuard\Allowance;
 use AryanX\Axle\AiGuard\Calls;
 use AryanX\Axle\AiGuard\Cleanup;
 use AryanX\Axle\AiGuard\Detectors;
@@ -17,8 +18,10 @@ use AryanX\Axle\AiGuard\Plugin;
 use AryanX\Axle\AiGuard\Policy;
 use AryanX\Axle\AiGuard\Prices;
 use AryanX\Axle\AiGuard\Reports;
+use AryanX\Axle\AiGuard\Requests;
 use AryanX\Axle\AiGuard\Runaway;
 use AryanX\Axle\AiGuard\Service;
+use AryanX\Axle\AiGuard\Rest\Controller;
 use AryanX\Axle\AiGuard\Settings;
 use AryanX\Axle\AiGuard\UserReport;
 use const AryanX\Axle\AiGuard\PLUGIN_FILE;
@@ -34,6 +37,16 @@ final class Page implements Service {
 
 	public const SLUG = 'axle-ai-guard';
 	public const TABS = array( 'overview', 'calls', 'people', 'budgets', 'rules', 'prices', 'settings' );
+
+	/**
+	 * The four tabs and the views inside each. A view is what `tab=` names in a URL, so older links still open.
+	 */
+	public const GROUPS = array(
+		'overview' => array( 'overview' ),
+		'calls'    => array( 'calls', 'people' ),
+		'limits'   => array( 'budgets', 'rules' ),
+		'settings' => array( 'settings', 'prices' ),
+	);
 
 	/**
 	 * Settings.
@@ -106,6 +119,20 @@ final class Page implements Service {
 	private Forecast $forecast;
 
 	/**
+	 * Requests for more AI.
+	 *
+	 * @var Requests
+	 */
+	private Requests $requests;
+
+	/**
+	 * "Allow for today" grants.
+	 *
+	 * @var Allowance
+	 */
+	private Allowance $allowance;
+
+	/**
 	 * Sets up the screen.
 	 *
 	 * @param Settings   $settings  Settings.
@@ -118,8 +145,10 @@ final class Page implements Service {
 	 * @param Cleanup    $cleanup   Clean-up.
 	 * @param Runaway    $runaway   Runaway guard.
 	 * @param Forecast   $forecast  Forecast.
+	 * @param Requests   $requests  Requests for more AI.
+	 * @param Allowance  $allowance Grants.
 	 */
-	public function __construct( Settings $settings, Policy $policy, KillSwitch $kill, Detectors $detectors, Prices $prices, Calls $calls, Reports $reports, Cleanup $cleanup, Runaway $runaway, Forecast $forecast ) {
+	public function __construct( Settings $settings, Policy $policy, KillSwitch $kill, Detectors $detectors, Prices $prices, Calls $calls, Reports $reports, Cleanup $cleanup, Runaway $runaway, Forecast $forecast, Requests $requests, Allowance $allowance ) {
 		$this->settings  = $settings;
 		$this->policy    = $policy;
 		$this->kill      = $kill;
@@ -130,6 +159,8 @@ final class Page implements Service {
 		$this->cleanup   = $cleanup;
 		$this->runaway   = $runaway;
 		$this->forecast  = $forecast;
+		$this->requests  = $requests;
+		$this->allowance = $allowance;
 	}
 
 	/**
@@ -139,7 +170,7 @@ final class Page implements Service {
 		add_action( 'admin_menu', array( $this, 'add_page' ) );
 		add_action( 'admin_notices', array( $this, 'notices' ) );
 		add_filter( 'plugin_action_links_' . plugin_basename( PLUGIN_FILE ), array( $this, 'action_links' ) );
-		foreach ( array( 'kill', 'budgets', 'callers', 'rules', 'prices', 'settings', 'runaway', 'steps', 'people_csv' ) as $action ) {
+		foreach ( array( 'kill', 'budgets', 'callers', 'rules', 'prices', 'settings', 'runaway', 'steps', 'people_csv', 'requests' ) as $action ) {
 			add_action( 'admin_post_axle_ai_guard_' . $action, array( $this, 'handle_' . $action ) );
 		}
 	}
@@ -230,6 +261,22 @@ final class Page implements Service {
 		$tab = isset( $_GET['tab'] ) ? sanitize_key( wp_unslash( $_GET['tab'] ) ) : 'overview'; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Navigation only.
 
 		return in_array( $tab, self::TABS, true ) ? $tab : 'overview';
+	}
+
+	/**
+	 * The tab a view belongs to.
+	 *
+	 * @param string $view A view from TABS.
+	 * @return string
+	 */
+	public static function group_of( string $view ): string {
+		foreach ( self::GROUPS as $group => $views ) {
+			if ( in_array( $view, $views, true ) ) {
+				return $group;
+			}
+		}
+
+		return 'overview';
 	}
 
 	/**
@@ -532,7 +579,7 @@ final class Page implements Service {
 		}
 
 		$tab    = $this->tab();
-		$labels = array(
+		$views  = array(
 			'overview' => __( 'Overview', 'axle-ai-guard' ),
 			'calls'    => __( 'Calls', 'axle-ai-guard' ),
 			'people'   => __( 'Users and roles', 'axle-ai-guard' ),
@@ -541,6 +588,13 @@ final class Page implements Service {
 			'prices'   => __( 'Prices', 'axle-ai-guard' ),
 			'settings' => __( 'Settings', 'axle-ai-guard' ),
 		);
+		$labels = array(
+			'overview' => __( 'Overview', 'axle-ai-guard' ),
+			'calls'    => __( 'Calls', 'axle-ai-guard' ),
+			'limits'   => __( 'Limits and rules', 'axle-ai-guard' ),
+			'settings' => __( 'Settings', 'axle-ai-guard' ),
+		);
+		$group  = self::group_of( $tab );
 
 		$intros = array(
 			'overview' => __( 'See which plugins make AI calls on this site, what they cost and what was blocked. The kill switch stops every call at once.', 'axle-ai-guard' ),
@@ -568,13 +622,29 @@ final class Page implements Service {
 		foreach ( $labels as $key => $label ) {
 			printf(
 				'<a href="%s" class="nav-tab%s"%s>%s</a>',
-				esc_url( self::url( $key ) ),
-				$key === $tab ? ' nav-tab-active' : '',
-				$key === $tab ? ' aria-current="page"' : '',
+				esc_url( self::url( self::GROUPS[ $key ][0] ) ),
+				$key === $group ? ' nav-tab-active' : '',
+				$key === $group ? ' aria-current="page"' : '',
 				esc_html( $label )
 			);
 		}
 		echo '</nav>';
+
+		if ( count( self::GROUPS[ $group ] ) > 1 ) {
+			echo '<ul class="subsubsub aag-views" aria-label="' . esc_attr__( 'Views', 'axle-ai-guard' ) . '">';
+			$last = count( self::GROUPS[ $group ] ) - 1;
+			foreach ( self::GROUPS[ $group ] as $index => $view ) {
+				printf(
+					'<li><a href="%s"%s%s>%s</a>%s</li>',
+					esc_url( self::url( $view ) ),
+					$view === $tab ? ' class="current"' : '',
+					$view === $tab ? ' aria-current="page"' : '',
+					esc_html( $views[ $view ] ),
+					$index < $last ? ' |' : ''
+				);
+			}
+			echo '</ul><br class="clear">';
+		}
 
 		echo '<p class="axle-intro">' . esc_html( $intros[ $tab ] ) . '</p>';
 
@@ -598,6 +668,8 @@ final class Page implements Service {
 		$changed = isset( $_GET['c'] ) ? absint( $_GET['c'] ) : 0;
 		$delta   = isset( $_GET['d'] ) ? (int) $_GET['d'] : 0;
 		$next    = isset( $_GET['next'] ) ? absint( $_GET['next'] ) : 0;
+		$request = isset( $_GET['req'] ) ? sanitize_key( wp_unslash( $_GET['req'] ) ) : '';
+		$person  = isset( $_GET['who'] ) ? absint( $_GET['who'] ) : 0;
 		// phpcs:enable
 
 		$map = array(
@@ -619,6 +691,10 @@ final class Page implements Service {
 			'runaway_raised'       => __( 'AI calls resumed, and the limit for this plugin is higher now.', 'axle-ai-guard' ),
 			'runaway_closed'       => __( 'Warning dismissed.', 'axle-ai-guard' ),
 			'runaway_same'         => __( 'Nothing changed: that warning was already dealt with.', 'axle-ai-guard' ),
+			'allowed'              => __( 'Allowed for today. That person can make more AI calls until the end of the day (UTC).', 'axle-ai-guard' ),
+			'allow_undone'         => __( 'The allowance was ended. What the person already used stays counted.', 'axle-ai-guard' ),
+			'request_dismissed'    => __( 'Request dismissed.', 'axle-ai-guard' ),
+			'request_same'         => __( 'Nothing changed: that request was already dealt with.', 'axle-ai-guard' ),
 		);
 
 		$tone = 'success';
@@ -686,6 +762,16 @@ final class Page implements Service {
 			$undo = array(
 				'action' => 'prices',
 				'fields' => array( 'do' => 'undo' ),
+				'label'  => __( 'Undo', 'axle-ai-guard' ),
+			);
+		} elseif ( 'allowed' === $done && ( '' !== $request || $person > 0 ) ) {
+			$undo = array(
+				'action' => 'requests',
+				'fields' => array(
+					'do'      => 'undo',
+					'request' => $request,
+					'user'    => (string) $person,
+				),
 				'label'  => __( 'Undo', 'axle-ai-guard' ),
 			);
 		} elseif ( in_array( $done, array( 'runaway_resumed', 'runaway_raised' ), true ) && '' !== $caller ) {
@@ -827,6 +913,8 @@ final class Page implements Service {
 		}
 		echo '</section>';
 
+		$this->render_requests();
+
 		echo '<section class="aag-section" aria-labelledby="aag-cards-title"><h2 id="aag-cards-title">' . esc_html__( 'Usage', 'axle-ai-guard' ) . '</h2>';
 		echo '<div class="axle-stats" data-aag-cards></div>';
 		echo '<p class="axle-muted">' . esc_html(
@@ -842,6 +930,83 @@ final class Page implements Service {
 		$this->render_breakdown();
 		$this->render_switches();
 		$this->render_recent_blocks();
+	}
+
+	/**
+	 * People who asked for more AI, and people allowed for today.
+	 */
+	private function render_requests(): void {
+		$open   = $this->requests->open();
+		$active = $this->allowance->active();
+		$recent = array();
+		foreach ( $this->requests->all() as $request ) {
+			if ( 'allowed' === $request['status'] && isset( $active[ (int) $request['user_id'] ] ) ) {
+				$recent[ (int) $request['user_id'] ] = $request;
+			}
+		}
+		if ( ! $open && ! $active ) {
+			return;
+		}
+
+		echo '<section class="axle-card aag-requests" aria-labelledby="aag-requests-title"><h2 class="axle-card__title" id="aag-requests-title">' . esc_html__( 'Asking for more AI', 'axle-ai-guard' ) . '</h2>';
+		echo '<p class="axle-muted">' . esc_html__( 'Allow for today gives a person more calls until the end of the day (UTC). Kill switches, plugin approval and data rules still apply. Undo ends it.', 'axle-ai-guard' ) . '</p>';
+
+		if ( $open ) {
+			echo '<div class="axle-scroll" tabindex="0" role="region" aria-label="' . esc_attr__( 'Requests waiting', 'axle-ai-guard' ) . '"><table class="widefat striped aag-table aag-request-table"><thead><tr><th scope="col">' . esc_html__( 'Person', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Stopped by', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Plugin', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Asked', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Decide', 'axle-ai-guard' ) . '</th></tr></thead><tbody>';
+			foreach ( Controller::present_requests( $open ) as $request ) {
+				echo '<tr data-request="' . esc_attr( $request['id'] ) . '"><td>' . esc_html( '' !== $request['user'] ? $request['user'] : (string) $request['user_id'] ) . '</td><td>' . esc_html( self::rule_label( $request['rule'] ) ) . '</td><td>' . esc_html( '' !== $request['caller'] ? $request['caller'] : '-' ) . '</td><td>' . wp_kses_post( AxleUi::relative_time( (int) strtotime( $request['at'] ) ) ) . '</td><td>';
+				echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="aag-inline-form">';
+				self::form_fields( 'requests' );
+				echo '<input type="hidden" name="request" value="' . esc_attr( $request['id'] ) . '">';
+				if ( Allowance::passes( $request['rule'] ) ) {
+					echo '<button type="submit" name="do" value="allow" class="button button-primary">' . esc_html__( 'Allow for today', 'axle-ai-guard' ) . '</button> ';
+				} else {
+					echo '<span class="axle-muted">' . esc_html__( 'Allowing cannot change this.', 'axle-ai-guard' ) . '</span> ';
+				}
+				echo '<button type="submit" name="do" value="dismiss" class="button">' . esc_html__( 'Dismiss', 'axle-ai-guard' ) . '</button></form></td></tr>';
+			}
+			echo '</tbody></table></div>';
+		}
+
+		if ( $active ) {
+			echo '<h3>' . esc_html__( 'Allowed for today', 'axle-ai-guard' ) . '</h3><ul class="aag-allowed">';
+			foreach ( $active as $user_id => $grant ) {
+				$user = get_userdata( $user_id );
+				echo '<li data-user="' . esc_attr( (string) $user_id ) . '">' . esc_html(
+					sprintf(
+						/* translators: 1: person's name, 2: calls left today. */
+						_n( '%1$s: %2$s call left today.', '%1$s: %2$s calls left today.', $grant['left'], 'axle-ai-guard' ),
+						$user ? (string) $user->display_name : (string) $user_id,
+						number_format_i18n( $grant['left'] )
+					)
+				) . ' ';
+				echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="aag-inline-form">';
+				self::form_fields( 'requests' );
+				echo '<input type="hidden" name="user" value="' . esc_attr( (string) $user_id ) . '"><input type="hidden" name="request" value="' . esc_attr( isset( $recent[ $user_id ] ) ? (string) $recent[ $user_id ]['id'] : '' ) . '">';
+				echo '<button type="submit" name="do" value="end" class="button-link">' . esc_html__( 'Undo', 'axle-ai-guard' ) . '</button></form></li>';
+			}
+			echo '</ul>';
+		}
+		echo '</section>';
+	}
+
+	/**
+	 * A rule in words, for the requests table.
+	 *
+	 * @param string $rule Rule.
+	 * @return string
+	 */
+	private static function rule_label( string $rule ): string {
+		$map = array(
+			'budget'   => __( 'A budget', 'axle-ai-guard' ),
+			'rate'     => __( 'A rate limit', 'axle-ai-guard' ),
+			'role'     => __( 'A role rule', 'axle-ai-guard' ),
+			'context'  => __( 'A context rule', 'axle-ai-guard' ),
+			'provider' => __( 'A provider rule', 'axle-ai-guard' ),
+			'model'    => __( 'A model rule', 'axle-ai-guard' ),
+		);
+
+		return $map[ (string) strtok( $rule, ':' ) ] ?? $rule;
 	}
 
 	/**
@@ -1478,7 +1643,7 @@ final class Page implements Service {
 
 		echo '<section class="axle-card"><h2 class="axle-card__title">' . esc_html__( 'Custom rules', 'axle-ai-guard' ) . '</h2>';
 		echo '<p class="description">' . esc_html__( 'A string matches without regard to case. A regex needs delimiters, such as /ORD-\d{6}/.', 'axle-ai-guard' ) . '</p>';
-		echo '<table class="widefat striped aag-table aag-custom"><thead><tr><th scope="col">' . esc_html__( 'Label', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Type', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Pattern', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Mode', 'axle-ai-guard' ) . '</th></tr></thead><tbody>';
+		echo '<div class="axle-scroll" tabindex="0" role="region" aria-label="' . esc_attr__( 'Custom rules', 'axle-ai-guard' ) . '"><table class="widefat striped aag-table aag-custom"><thead><tr><th scope="col">' . esc_html__( 'Label', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Type', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Pattern', 'axle-ai-guard' ) . '</th><th scope="col">' . esc_html__( 'Mode', 'axle-ai-guard' ) . '</th></tr></thead><tbody>';
 		$custom   = $this->detectors->custom();
 		$custom[] = array(
 			'label'   => '',
@@ -1499,7 +1664,7 @@ final class Page implements Service {
 			}
 			echo '</select></td></tr>';
 		}
-		echo '</tbody></table></section>';
+		echo '</tbody></table></div></section>';
 		submit_button( __( 'Save data rules', 'axle-ai-guard' ) );
 		echo '</form>';
 
@@ -2052,5 +2217,43 @@ final class Page implements Service {
 		self::verify( 'steps' );
 		update_user_meta( get_current_user_id(), 'axle_ai_guard_steps_dismissed', 1 );
 		self::back( 'overview', 'steps' );
+	}
+
+	/**
+	 * Handles the requests for more AI: allow for today, dismiss, or end an allowance.
+	 */
+	public function handle_requests(): void {
+		self::verify( 'requests' );
+		$do      = sanitize_key( (string) self::posted( 'do' ) );
+		$request = sanitize_key( (string) self::posted( 'request' ) );
+		$user_id = absint( self::posted( 'user' ) );
+		$by      = get_current_user_id();
+
+		if ( 'allow' === $do ) {
+			$result = $this->requests->allow( $request, $by );
+			if ( ! $result ) {
+				self::back( 'overview', 'request_same' );
+			}
+			self::back(
+				'overview',
+				'allowed',
+				array(
+					'req' => $request,
+					'who' => (int) $result['request']['user_id'],
+				)
+			);
+		}
+		if ( 'dismiss' === $do ) {
+			self::back( 'overview', $this->requests->dismiss( $request, $by ) ? 'request_dismissed' : 'request_same' );
+		}
+		if ( in_array( $do, array( 'end', 'undo' ), true ) && '' !== $request && $this->requests->undo( $request, $by ) ) {
+			self::back( 'overview', 'allow_undone' );
+		}
+		if ( in_array( $do, array( 'end', 'undo' ), true ) && $user_id > 0 ) {
+			$this->requests->revoke_user( $user_id, $by );
+			self::back( 'overview', 'allow_undone' );
+		}
+
+		self::back( 'overview', 'request_same' );
 	}
 }

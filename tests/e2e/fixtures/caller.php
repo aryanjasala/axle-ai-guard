@@ -42,6 +42,23 @@ add_action(
 			)
 		);
 
+		// Like a plugin that hands the AI Client's error straight back to the editor.
+		register_rest_route(
+			$aag_caller_namespace,
+			'/generate',
+			array(
+				'methods'             => 'POST',
+				'permission_callback' => 'is_user_logged_in',
+				'callback'            => static function ( WP_REST_Request $request ) {
+					$text = wp_ai_client_prompt( (string) $request->get_param( 'prompt' ) )->using_provider( 'aag-fixture' )->generate_text();
+					return is_wp_error( $text ) ? $text : array(
+						'ok'   => true,
+						'text' => $text,
+					);
+				},
+			)
+		);
+
 		register_rest_route(
 			$aag_caller_namespace,
 			'/supported',

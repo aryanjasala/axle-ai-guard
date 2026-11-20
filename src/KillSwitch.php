@@ -7,6 +7,8 @@
 
 namespace AryanX\Axle\AiGuard;
 
+use AryanX\Axle\AiGuard\Admin\AxleUi;
+
 defined( 'ABSPATH' ) || exit;
 
 /**
@@ -304,24 +306,41 @@ final class KillSwitch implements Service {
 	}
 
 	/**
-	 * Shows "AI is off" in the admin bar while any switch is on.
+	 * Shows "AI is off" in the admin bar while any switch is on, and "AI warning" while a runaway
+	 * is flagged and waits for someone (alert-only mode pauses nothing, so nothing else shows it).
+	 * Below 782 px it stays as an icon.
 	 *
 	 * @param \WP_Admin_Bar $bar Admin bar.
 	 */
 	public function admin_bar( $bar ): void {
-		if ( ! current_user_can( Plugin::capability() ) || ! $this->any_on() ) {
+		if ( ! current_user_can( Plugin::capability() ) ) {
 			return;
+		}
+
+		$plugin  = Plugin::instance();
+		$flagged = $plugin && $plugin->runaway()->open_events();
+		if ( ! $this->any_on() && ! $flagged ) {
+			return;
+		}
+
+		if ( $this->global_on() ) {
+			$label = __( 'AI is off', 'axle-ai-guard' );
+		} elseif ( $this->any_on() ) {
+			$label = __( 'AI partly off', 'axle-ai-guard' );
+		} else {
+			$label = __( 'AI warning', 'axle-ai-guard' );
 		}
 
 		// Core's own admin bar classes and colours: a warning icon and words, no colour of ours.
 		$bar->add_node(
 			array(
 				'id'    => 'axle-ai-guard',
-				'title' => '<span class="ab-icon dashicons-before dashicons-warning" aria-hidden="true"></span><span class="ab-label">' . ( $this->global_on() ? esc_html__( 'AI is off', 'axle-ai-guard' ) : esc_html__( 'AI partly off', 'axle-ai-guard' ) ) . '</span>',
+				'title' => '<span class="ab-icon dashicons-before dashicons-warning" aria-hidden="true"></span><span class="ab-label">' . esc_html( $label ) . '</span>',
 				'href'  => admin_url( 'tools.php?page=axle-ai-guard' ),
 				'meta'  => array( 'class' => 'aag-adminbar' ),
 			)
 		);
+		AxleUi::admin_bar_mobile( 'axle-ai-guard', 'dashicons-warning' );
 	}
 
 	/**

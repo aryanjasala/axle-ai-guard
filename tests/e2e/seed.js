@@ -16,6 +16,8 @@ const OPTIONS = [
 	'aag_fixture_fail',
 	'aag_fixture_mail',
 	'aag_fixture_actions',
+	'aag_fixture_ip_header',
+	'axle_ai_guard_requests',
 ];
 
 /** The fake provider (a must-use plugin) and the caller plugins. */
@@ -160,6 +162,7 @@ async function seedRunaway() {
 function unseed() {
 	reset();
 	removePeople();
+	removeRequest();
 }
 
 const PEOPLE = [
@@ -202,4 +205,38 @@ function removePeople() {
 	}
 }
 
-module.exports = { installFixtures, removeFixtures, reset, call, supported, direct, seedActivity, seedPeople, removePeople, seedRunaway, seedUnpriced, killChat, unseed, OPTIONS };
+/** A person who was blocked and asked for more, and another who is allowed for today. */
+async function seedRequest() {
+	installFixtures();
+	reset();
+	for ( const person of [ { login: 'aag_ask', name: 'Ask Author' }, { login: 'aag_ok', name: 'Allowed Author' } ] ) {
+		try {
+			wp( 'user', 'create', person.login, `${ person.login }@example.com`, '--role=author', `--display_name=${ person.name }`, '--user_pass=admin' );
+		} catch ( error ) {
+			// Already there.
+		}
+	}
+	wp( 'axle-ai-guard', 'budget', 'set', 'plugin:caller-a', '--monthly-cost=0.0018' );
+	await call( 'caller-a' );
+	const asker = await appPasswordClient( 'aag_ask', 'AI Guard seed ask' );
+	try {
+		await asker.call( 'POST', '/caller-a/v1/generate', { prompt: 'Excerpt.' } );
+		await asker.call( 'POST', '/axle-ai-guard/v1/access-requests' );
+	} finally {
+		await asker.dispose();
+	}
+	wp( 'axle-ai-guard', 'allow', 'aag_ok', '--calls=12' );
+}
+
+/** Removes the people seedRequest() created. */
+function removeRequest() {
+	for ( const login of [ 'aag_ask', 'aag_ok' ] ) {
+		try {
+			wp( 'user', 'delete', login, '--yes' );
+		} catch ( error ) {
+			// Not there.
+		}
+	}
+}
+
+module.exports = { seedRequest, removeRequest, installFixtures, removeFixtures, reset, call, supported, direct, seedActivity, seedPeople, removePeople, seedRunaway, seedUnpriced, killChat, unseed, OPTIONS };

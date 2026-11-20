@@ -160,3 +160,28 @@
 .aag-runaway-notice .aag-inline-form {
 	margin: 0 0 8px;
 }
+
+/* Nothing on these screens scrolls the page sideways on a phone. */
+.aag-inline-form input.regular-text,
+.aag-grid input,
+.aag-grid select {
+	max-width: 100%;
+}
+
+.aag-inline-form {
+	max-width: 100%;
+}
+
+.aag-policy {
+	min-width: 0;
+	box-sizing: border-box;
+}
+
+.aag-grid {
+	min-width: 0;
+}
+
+.aag-grid p {
+	min-width: 0;
+	max-width: 100%;
+}

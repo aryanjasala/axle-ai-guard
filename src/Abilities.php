@@ -10,9 +10,10 @@ namespace AryanX\Axle\AiGuard;
 defined( 'ABSPATH' ) || exit;
 
 /**
- * An agent can read usage, calls and limits, test the data rules and stop AI
- * spending with the kill switch. No ability turns a switch back off, raises a
- * budget or loosens a rule: only a person in wp-admin or on WP-CLI can.
+ * An agent can read usage, calls, limits and the requests people made for more
+ * AI, test the data rules and stop AI spending with the kill switch. No ability
+ * turns a switch back off, raises a budget, loosens a rule or allows a person
+ * for today: only a person in wp-admin or on WP-CLI can.
  */
 final class Abilities implements Service {
 
@@ -54,6 +55,13 @@ final class Abilities implements Service {
 	private Forecast $forecast;
 
 	/**
+	 * Requests for more AI.
+	 *
+	 * @var Requests
+	 */
+	private Requests $requests;
+
+	/**
 	 * Sets up the abilities.
 	 *
 	 * @param Reports    $reports  Reports.
@@ -61,13 +69,15 @@ final class Abilities implements Service {
 	 * @param Calls      $calls    The call log.
 	 * @param Runaway    $runaway  Runaway guard.
 	 * @param Forecast   $forecast Forecast.
+	 * @param Requests   $requests Requests for more AI.
 	 */
-	public function __construct( Reports $reports, KillSwitch $kill, Calls $calls, Runaway $runaway, Forecast $forecast ) {
+	public function __construct( Reports $reports, KillSwitch $kill, Calls $calls, Runaway $runaway, Forecast $forecast, Requests $requests ) {
 		$this->reports  = $reports;
 		$this->kill     = $kill;
 		$this->calls    = $calls;
 		$this->runaway  = $runaway;
 		$this->forecast = $forecast;
+		$this->requests = $requests;
 	}
 
 	/**
@@ -367,6 +377,51 @@ final class Abilities implements Service {
 			array( $this, 'get_runaway_status' ),
 			$readonly
 		);
+
+		$this->ability(
+			'list-access-requests',
+			__( 'List requests for more AI', 'axle-ai-guard' ),
+			__( 'The requests people made for more AI after a call of theirs was blocked: who, which rule stopped them, which plugin, when, and whether an administrator allowed it for today or dismissed it. Allowing a person is not an ability; only a person in wp-admin or on WP-CLI can.', 'axle-ai-guard' ),
+			array(
+				'type'                 => 'object',
+				'properties'           => array(
+					'status' => array(
+						'type'    => 'string',
+						'enum'    => array( 'open', 'allowed', 'dismissed', 'all' ),
+						'default' => 'open',
+					),
+				),
+				'additionalProperties' => false,
+				'default'              => array(),
+			),
+			array(
+				'type'       => 'object',
+				'properties' => array(
+					'requests' => array( 'type' => 'array' ),
+				),
+			),
+			array( $this, 'list_access_requests' ),
+			$readonly
+		);
+	}
+
+	/**
+	 * Ability: requests for more AI.
+	 *
+	 * @param array|null $input Input.
+	 * @return array
+	 */
+	public function list_access_requests( $input = null ): array {
+		$input  = (array) $input;
+		$status = (string) ( $input['status'] ?? 'open' );
+		$list   = array_filter(
+			$this->requests->all(),
+			static function ( array $request ) use ( $status ): bool {
+				return 'all' === $status || (string) $request['status'] === $status;
+			}
+		);
+
+		return array( 'requests' => \AryanX\Axle\AiGuard\Rest\Controller::present_requests( array_values( $list ) ) );
 	}
 
 	/**

@@ -14,6 +14,7 @@ use AryanX\Axle\AiGuard\KillSwitch;
 use AryanX\Axle\AiGuard\Forecast;
 use AryanX\Axle\AiGuard\Prices;
 use AryanX\Axle\AiGuard\Reports;
+use AryanX\Axle\AiGuard\Requests;
 use AryanX\Axle\AiGuard\Runaway;
 use AryanX\Axle\AiGuard\Settings;
 use WP_CLI;
@@ -89,6 +90,13 @@ final class Command {
 	private Forecast $forecast;
 
 	/**
+	 * Requests for more AI.
+	 *
+	 * @var Requests
+	 */
+	private Requests $requests;
+
+	/**
 	 * Sets up the command.
 	 *
 	 * @param Settings   $settings  Settings.
@@ -100,8 +108,9 @@ final class Command {
 	 * @param Cleanup    $cleanup   Clean-up.
 	 * @param Runaway    $runaway   Runaway guard.
 	 * @param Forecast   $forecast  Forecast.
+	 * @param Requests   $requests  Requests for more AI.
 	 */
-	public function __construct( Settings $settings, KillSwitch $kill, Detectors $detectors, Prices $prices, Calls $calls, Reports $reports, Cleanup $cleanup, Runaway $runaway, Forecast $forecast ) {
+	public function __construct( Settings $settings, KillSwitch $kill, Detectors $detectors, Prices $prices, Calls $calls, Reports $reports, Cleanup $cleanup, Runaway $runaway, Forecast $forecast, Requests $requests ) {
 		$this->settings  = $settings;
 		$this->kill      = $kill;
 		$this->detectors = $detectors;
@@ -111,6 +120,7 @@ final class Command {
 		$this->cleanup   = $cleanup;
 		$this->runaway   = $runaway;
 		$this->forecast  = $forecast;
+		$this->requests  = $requests;
 	}
 
 	/**
@@ -936,5 +946,93 @@ final class Command {
 		}
 
 		return array( 'global', '' );
+	}
+
+	/**
+	 * Lists the requests people made for more AI.
+	 *
+	 * ## OPTIONS
+	 *
+	 * [--status=<status>]
+	 * : open, allowed, dismissed or all.
+	 * ---
+	 * default: open
+	 * ---
+	 *
+	 * [--format=<format>]
+	 * : table, csv, json or yaml.
+	 * ---
+	 * default: table
+	 * ---
+	 *
+	 * @param array $args  Positional arguments.
+	 * @param array $assoc Options.
+	 */
+	public function requests( $args, $assoc ): void {
+		unset( $args );
+		$status = (string) ( $assoc['status'] ?? 'open' );
+		$rows   = array();
+		foreach ( \AryanX\Axle\AiGuard\Rest\Controller::present_requests( $this->requests->all() ) as $request ) {
+			if ( 'all' === $status || $request['status'] === $status ) {
+				$rows[] = $request;
+			}
+		}
+		\WP_CLI\Utils\format_items( (string) ( $assoc['format'] ?? 'table' ), $rows, array( 'id', 'user_id', 'user', 'rule', 'caller', 'at', 'status', 'calls' ) );
+	}
+
+	/**
+	 * Allows a person more AI calls for the rest of today (UTC). Kill switches, caller approval and data rules still apply.
+	 *
+	 * ## OPTIONS
+	 *
+	 * <user>
+	 * : User ID, login or email.
+	 *
+	 * [--calls=<calls>]
+	 * : How many calls. Default 20.
+	 *
+	 * @param array $args  Positional arguments.
+	 * @param array $assoc Options.
+	 */
+	public function allow( $args, $assoc ): void {
+		$user  = self::find_user( (string) ( $args[0] ?? '' ) );
+		$by    = get_current_user_id();
+		$calls = $this->requests->allow_user( (int) $user->ID, $by, (int) ( $assoc['calls'] ?? 0 ) );
+		/* translators: 1: user login, 2: number of calls. */
+		WP_CLI::success( sprintf( __( '%1$s may make %2$d more AI calls until the end of today (UTC).', 'axle-ai-guard' ), $user->user_login, $calls ) );
+	}
+
+	/**
+	 * Ends a person's allowance for today. What they used stays counted.
+	 *
+	 * ## OPTIONS
+	 *
+	 * <user>
+	 * : User ID, login or email.
+	 *
+	 * @param array $args  Positional arguments.
+	 * @param array $assoc Options.
+	 */
+	public function unallow( $args, $assoc ): void {
+		unset( $assoc );
+		$user = self::find_user( (string) ( $args[0] ?? '' ) );
+		$left = $this->requests->revoke_user( (int) $user->ID, get_current_user_id() );
+		/* translators: 1: user login, 2: calls that were left. */
+		WP_CLI::success( sprintf( __( 'Ended the allowance for %1$s (%2$d calls were left).', 'axle-ai-guard' ), $user->user_login, $left ) );
+	}
+
+	/**
+	 * Finds a user by ID, login or email, or stops.
+	 *
+	 * @param string $who ID, login or email.
+	 * @return \WP_User
+	 */
+	private static function find_user( string $who ) {
+		$user = is_numeric( $who ) ? get_userdata( (int) $who ) : ( false !== strpos( $who, '@' ) ? get_user_by( 'email', $who ) : get_user_by( 'login', $who ) );
+		if ( ! $user ) {
+			WP_CLI::error( __( 'No such user.', 'axle-ai-guard' ) );
+		}
+
+		return $user;
 	}
 }

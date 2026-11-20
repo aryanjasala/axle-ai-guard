@@ -47,18 +47,27 @@ final class Cleanup implements Service {
 	private Prices $prices;
 
 	/**
+	 * Requests for more AI.
+	 *
+	 * @var Requests|null
+	 */
+	private ?Requests $requests;
+
+	/**
 	 * Sets up the clean-up.
 	 *
-	 * @param Settings $settings Settings.
-	 * @param Calls    $calls    The call log.
-	 * @param Usage    $usage    Usage counters.
-	 * @param Prices   $prices   Prices.
+	 * @param Settings      $settings Settings.
+	 * @param Calls         $calls    The call log.
+	 * @param Usage         $usage    Usage counters.
+	 * @param Prices        $prices   Prices.
+	 * @param Requests|null $requests Requests for more AI, pruned with the rest.
 	 */
-	public function __construct( Settings $settings, Calls $calls, Usage $usage, Prices $prices ) {
+	public function __construct( Settings $settings, Calls $calls, Usage $usage, Prices $prices, ?Requests $requests = null ) {
 		$this->settings = $settings;
 		$this->calls    = $calls;
 		$this->usage    = $usage;
 		$this->prices   = $prices;
+		$this->requests = $requests;
 	}
 
 	/**
@@ -124,6 +133,9 @@ final class Cleanup implements Service {
 
 		$counts['prompts'] = $this->calls->prune( 'prompts', gmdate( 'Y-m-d H:i:s' ), self::BATCH * self::MAX_BATCHES );
 		$counts['usage']   = $this->usage->prune( $this->retention( 'usage' ), self::BATCH * self::MAX_BATCHES );
+		if ( $this->requests ) {
+			$this->requests->prune();
+		}
 
 		if ( $more ) {
 			wp_schedule_single_event( time() + 5 * MINUTE_IN_SECONDS, Schema::CRON );

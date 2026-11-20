@@ -1,6 +1,6 @@
 // Regenerates .wordpress-org/screenshot-N.png (readme.txt "== Screenshots ==" and README.md).
 // Run on demand: npm run screenshots
-const { test, expect, wp } = require( './utils' );
+const { test, expect, wp, logInAs, openEditor } = require( './utils' );
 const { STORAGE_STATE } = require( './utils/config' );
 const { prepareSite, shot } = require( './utils/media' );
 const { seedActivity, unseed, removeFixtures } = require( './seed' );
@@ -54,8 +54,8 @@ test.describe( 'Screenshots', () => {
 
 	test( '5: data rules and the test box', async () => {
 		await page.goto( `${ SCREEN }&tab=rules` );
-		await page.getByLabel( 'Paste text. Nothing is sent to any AI provider.' ).fill( 'Order 1042 for admin@example.com, phone +91 98765 43210. Card 4111 1111 1111 1111.' );
-		await page.getByRole( 'button', { name: 'Test', exact: true } ).click();
+		await page.getByLabel( 'Text to check' ).fill( 'Order 1042 for admin@example.com, phone +91 98765 43210. Card 4111 1111 1111 1111.' );
+		await page.getByRole( 'button', { name: 'Check the text' } ).click();
 		await expect( page.locator( '.aag-test-result' ) ).toBeVisible();
 		await shot( page, 5, { fullPage: true } );
 	} );
@@ -65,5 +65,32 @@ test.describe( 'Screenshots', () => {
 		await page.goto( `${ SCREEN }&tab=prices` );
 		await expect( page.locator( '.aag-prices' ) ).toBeVisible();
 		await shot( page, 6 );
+	} );
+
+	test( '7: a blocked call in the editor, with Ask for more', async ( { browser } ) => {
+		const id = Number( wp( 'user', 'create', 'shotwriter', 'shotwriter@example.com', '--role=author', '--display_name=Wanda Writer', '--user_pass=admin', '--porcelain' ) );
+		const post = Number( wp( 'post', 'create', '--post_title=Single origin tasting notes', '--post_status=draft', `--post_author=${ id }`, '--porcelain' ) );
+		wp( 'axle-ai-guard', 'budget', 'set', 'plugin:chat-assistant', '--monthly-cost=0.0001' );
+		const session = await logInAs( browser, 'shotwriter', 'admin', { viewport: { width: 1280, height: 720 }, deviceScaleFactor: 2 } );
+		try {
+			await openEditor( session.page, post );
+			await session.page.waitForFunction( () => window.axleWallReady );
+			await session.page.evaluate( () => window.wp.apiFetch( { path: '/chat-assistant/v1/generate', method: 'POST', data: { prompt: 'Excerpt please.' } } ).catch( () => null ) );
+			await expect( session.page.locator( '.components-notice' ).filter( { hasText: 'Ask for more' } ) ).toBeVisible();
+			await shot( session.page, 7 );
+			await session.page.locator( '.components-notice' ).getByRole( 'button', { name: 'Ask for more' } ).click();
+			await expect( session.page.locator( '.components-snackbar' ) ).toContainText( 'Request sent' );
+		} finally {
+			await session.context.close();
+			wp( 'post', 'delete', String( post ), '--force' );
+		}
+		wp( 'axle-ai-guard', 'budget', 'set', 'plugin:chat-assistant', '--monthly-cost=0.009' );
+	} );
+
+	test( '8: the request on the overview, with Allow for today', async () => {
+		await page.goto( SCREEN );
+		await expect( page.locator( '.aag-request-table' ) ).toContainText( 'Wanda Writer' );
+		await shot( page, 8 );
+		wp( 'user', 'delete', 'shotwriter', '--yes' );
 	} );
 } );

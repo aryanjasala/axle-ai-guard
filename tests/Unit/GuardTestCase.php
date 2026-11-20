@@ -141,6 +141,13 @@ abstract class GuardTestCase extends TestCase {
 					$this->transients[ $key ] = $value;
 					return true;
 				},
+				'delete_transient'     => function ( $key ) {
+					unset( $this->transients[ $key ] );
+					return true;
+				},
+				'wp_rand'              => static function ( $min = 0, $max = 0 ) {
+					return random_int( 1, 999999 );
+				},
 				'wp_mail'              => function ( $to, $subject ) {
 					$this->mails[] = array( 'to' => $to, 'subject' => $subject );
 					return true;

@@ -183,3 +183,11 @@ foreach ( array( 'axle_ai_guard_budget_soft_reached', 'axle_ai_guard_budget_hard
 		4
 	);
 }
+
+// A test can name the header that carries the visitor address, as a site would in wp-config.php.
+add_filter(
+	'axle_ai_guard_ip_header',
+	static function ( $header ) {
+		return (string) get_option( 'aag_fixture_ip_header', $header );
+	}
+);

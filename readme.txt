@@ -29,7 +29,7 @@ Part of Axle by AryanX, a family of plugins for running WordPress sites safely.
 
 * Daily and monthly budgets in tokens and in money, for the whole site and per plugin. An alert at 80% (you pick the share), a block at 100%.
 * A forecast says when each monthly budget runs out at the pace of the last 7 days, for the site and per plugin, with one alert a month.
-* Rate limits per plugin (60 calls a minute), per logged-in user (20), per visitor IP address (5, so a chatbot or a form cannot become a free AI proxy) and for the site (120).
+* Rate limits per plugin (60 calls a minute), per logged-in user (20), per visitor IP address (5, so a chatbot or a form cannot become a free AI proxy; behind a proxy, name the header in wp-config.php, see the reference) and for the site (120).
 * Allowed contexts (front end, wp-admin, REST, Ajax, cron, WP-CLI), providers, models and roles, per plugin or for the site.
 
 **Usage per user and role:**
@@ -38,12 +38,18 @@ Part of Axle by AryanX, a family of plugins for running WordPress sites safely.
 * Cost is listed per currency. Each user counts under their first role, so the role totals add up to the site total.
 * Download it as CSV. The file has login names and no email addresses. Only people with the AI Guard capability can see or download it.
 
+**Tell the person, and let them ask for more:**
+
+* When a signed-in person's AI call is blocked by a budget, a rate limit or a rule, the block editor and wp-admin show why in plain words, with an Ask for more button. They never see amounts, limits or anyone else's usage.
+* You get the request on the Overview screen. Allow for today gives that person a number of calls (20 by default) until the end of the day (UTC). It is counted in the same atomic counters as everything else, so a burst of parallel calls cannot use more than you gave. Undo ends it.
+* An allowance never passes a kill switch, plugin approval or a data rule.
+
 **Kill switches:**
 
 * For the whole site, one plugin, one provider or one context, from the screen, WP-CLI, an ability or the `AXLE_AI_GUARD_KILL` constant in wp-config.php. On multisite, a network switch.
 * Runaway protection learns how many calls each plugin makes in a normal hour. A plugin that makes ten times that (and at least 100 in an hour) is paused on its own on new installs, or flagged on existing ones, you get an alert, and one click resumes it, with or without a higher limit.
 * Optional auto-trip when the monthly money budget is reached, or when too many calls fail in 5 minutes.
-* While a switch is on, administrators see a notice and "AI is off" in the toolbar.
+* While a switch is on, or a runaway is flagged, administrators see a notice and "AI is off" (or "AI warning") in the toolbar, also on phones.
 
 **What was sent, and what it cost:**
 
@@ -106,9 +112,13 @@ They are estimates: tokens times the price table. The table ships with list pric
 
 A `WP_Error`, as it would for any failed AI call. `prompt_prevented` (503) for kill switches, approvals, contexts, roles, used-up budgets and rate limits, and `prompt_builder_error` (500) with a message that names the rule for data rules, model rules and estimated budgets.
 
+= Behind a proxy, every visitor shares one limit. What do I do? =
+
+The visitor limit uses the address that connected to the web server. A forwarded header such as `X-Forwarded-For` is never trusted unless you name it: `define( 'AXLE_AI_GUARD_IP_HEADER', 'HTTP_CF_CONNECTING_IP' );` in wp-config.php, and optionally `AXLE_AI_GUARD_TRUSTED_PROXIES` with the proxy addresses. The `axle_ai_guard_visitor_ip` filter has the last word.
+
 = Can an AI agent turn the guard off? =
 
-No. Agents get abilities to read usage, calls, limits and runaway status, test the data rules and switch AI off or pause a plugin. No ability turns a switch back on or resumes a plugin, raises a budget or loosens a rule. Only a person in wp-admin or on WP-CLI can.
+No. Agents get abilities to read usage, calls, limits and runaway status, test the data rules and switch AI off or pause a plugin. No ability turns a switch back on or resumes a plugin, raises a budget, loosens a rule or allows a person for today. Only a person in wp-admin or on WP-CLI can.
 
 = Does it work with the official AI plugin? =
 
@@ -126,6 +136,8 @@ Yes, per site: each site has its own log, budgets and rules. Network Admin has a
 4. Budgets and limits per plugin: tokens and money, rate limits, contexts, providers, models and roles.
 5. Data rules with Try your rules: each match marked and labelled, the outcome and the rule that decided.
 6. Prices per provider and model, editable, with the date they are from.
+7. A blocked call in the block editor: the reason in plain words, with Ask for more.
+8. The request on the Overview screen, with Allow for today.
 
 == Changelog ==
 

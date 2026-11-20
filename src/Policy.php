@@ -49,18 +49,76 @@ final class Policy {
 	private Alerts $alerts;
 
 	/**
+	 * "Allow for today" grants.
+	 *
+	 * @var Allowance
+	 */
+	private Allowance $allowance;
+
+	/**
+	 * Whether the call being checked now passed a block with a person's grant.
+	 *
+	 * @var bool
+	 */
+	private bool $overridden = false;
+
+	/**
 	 * Sets up the policy.
 	 *
-	 * @param Settings   $settings Settings.
-	 * @param KillSwitch $kill     Kill switches.
-	 * @param Usage      $usage    Usage counters.
-	 * @param Alerts     $alerts   Alerts.
+	 * @param Settings       $settings  Settings.
+	 * @param KillSwitch     $kill      Kill switches.
+	 * @param Usage          $usage     Usage counters.
+	 * @param Alerts         $alerts    Alerts.
+	 * @param Allowance|null $allowance Grants, or a new set.
 	 */
-	public function __construct( Settings $settings, KillSwitch $kill, Usage $usage, Alerts $alerts ) {
-		$this->settings = $settings;
-		$this->kill     = $kill;
-		$this->usage    = $usage;
-		$this->alerts   = $alerts;
+	public function __construct( Settings $settings, KillSwitch $kill, Usage $usage, Alerts $alerts, ?Allowance $allowance = null ) {
+		$this->settings  = $settings;
+		$this->kill      = $kill;
+		$this->usage     = $usage;
+		$this->alerts    = $alerts;
+		$this->allowance = $allowance ?? new Allowance();
+	}
+
+	/**
+	 * Whether the call checked last went through on a person's "Allow for today".
+	 *
+	 * @return bool
+	 */
+	public function overridden(): bool {
+		return $this->overridden;
+	}
+
+	/**
+	 * Lets a signed-in person's grant pass a block it may pass. The first block of a call takes
+	 * one call from the grant, with one atomic update; the rest of the same call passes without
+	 * taking another. Kill switches, caller approval and data rules are never passed.
+	 *
+	 * @param array      $call  Call details.
+	 * @param array|null $block The block.
+	 * @return array|null The block, or null when a grant passed it.
+	 */
+	private function relax( array $call, ?array $block ): ?array {
+		if ( null === $block || empty( $call['user_id'] ) || ! Allowance::passes( (string) $block['rule'] ) ) {
+			return $block;
+		}
+		if ( ! $this->overridden ) {
+			if ( ! $this->allowance->consume( (int) $call['user_id'] ) ) {
+				return $block;
+			}
+			$this->overridden = true;
+
+			/**
+			 * Fires when a call goes ahead because the person was allowed for today.
+			 *
+			 * @param int    $user_id The person.
+			 * @param string $rule    The rule that would have blocked it.
+			 * @param int    $left    Calls the person has left today.
+			 * @param array  $call    Call details.
+			 */
+			do_action( 'axle_ai_guard_allowance_used', (int) $call['user_id'], (string) $block['rule'], $this->allowance->left( (int) $call['user_id'] ), $call );
+		}
+
+		return null;
 	}
 
 	/**
@@ -170,7 +228,9 @@ final class Policy {
 	 * @return array{rule: string, message: string}|null A block, or null.
 	 */
 	public function pre( array $call ): ?array {
-		return $this->decide( $call, 'pre', $this->pre_block( $call ) );
+		$this->overridden = false;
+
+		return $this->decide( $call, 'pre', $this->relax( $call, $this->pre_block( $call ) ) );
 	}
 
 	/**
@@ -198,7 +258,7 @@ final class Policy {
 			}
 		}
 
-		return $this->decide( $call, 'model', $block );
+		return $this->decide( $call, 'model', $this->relax( $call, $block ) );
 	}
 
 	/**
@@ -218,7 +278,7 @@ final class Policy {
 			}
 		}
 
-		return $this->decide( $call, 'estimate', $block );
+		return $this->decide( $call, 'estimate', $this->relax( $call, $block ) );
 	}
 
 	/**
